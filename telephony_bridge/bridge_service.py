@@ -20,6 +20,7 @@ import math
 import socket
 import socketserver
 import struct
+import threading
 import time
 import uuid
 
@@ -38,6 +39,13 @@ FRAME_BYTES = 320           # 20ms of 8kHz 16-bit mono PCM
 FRAME_MS = 20
 SILENCE_MS_TO_END_TURN = 800
 MAX_UTTERANCE_MS = 15_000
+
+# Asterisk's AudioSocket app kills the call after ~2s of the bridge sending
+# nothing back, regardless of whether the call is otherwise still alive. STT+LLM
+# on CPU routinely take longer than that, so a keepalive thread sends silent
+# frames at this interval (well under the 2s cutoff) while a reply is being
+# generated, and stops as soon as the real reply audio is ready to send.
+KEEPALIVE_INTERVAL_S = 0.5
 
 MSG_TERMINATE = 0x00
 MSG_UUID = 0x01
@@ -67,16 +75,32 @@ def recv_message(sock: socket.socket):
     return msg_type, payload
 
 
-def send_audio(sock: socket.socket, pcm_8k_int16: np.ndarray):
+def send_audio_frame(sock: socket.socket, frame: bytes, lock: threading.Lock):
+    if len(frame) < FRAME_BYTES:
+        frame = frame + b"\x00" * (FRAME_BYTES - len(frame))
+    with lock:
+        sock.sendall(bytes([MSG_AUDIO]) + struct.pack(">H", len(frame)) + frame)
+
+
+def send_audio(sock: socket.socket, pcm_8k_int16: np.ndarray, lock: threading.Lock):
     """Send int16 8kHz mono PCM as a sequence of 320-byte AudioSocket frames,
     paced roughly in real time so Asterisk plays it back naturally."""
     raw = pcm_8k_int16.astype("<i2").tobytes()
     for i in range(0, len(raw), FRAME_BYTES):
-        frame = raw[i:i + FRAME_BYTES]
-        if len(frame) < FRAME_BYTES:
-            frame = frame + b"\x00" * (FRAME_BYTES - len(frame))
-        sock.sendall(bytes([MSG_AUDIO]) + struct.pack(">H", len(frame)) + frame)
+        send_audio_frame(sock, raw[i:i + FRAME_BYTES], lock)
         time.sleep(FRAME_MS / 1000.0)
+
+
+def run_keepalive(sock: socket.socket, lock: threading.Lock, stop_event: threading.Event):
+    """Sends silent audio frames until stop_event is set, to keep Asterisk's
+    AudioSocket inactivity timeout from killing the call while we're busy
+    running STT/LLM/TTS."""
+    silence = b"\x00" * FRAME_BYTES
+    while not stop_event.wait(KEEPALIVE_INTERVAL_S):
+        try:
+            send_audio_frame(sock, silence, lock)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            return
 
 
 def resample(int16_array: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
@@ -87,11 +111,11 @@ def resample(int16_array: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
     return np.clip(resampled, -32768, 32767)
 
 
-def speak(sock: socket.socket, text: str):
+def speak(sock: socket.socket, text: str, lock: threading.Lock):
     print(f"  [TTS] \"{text}\"")
     pcm_native = pipeline.synthesize_pcm(text)
     pcm_8k = resample(pcm_native, pipeline.piper_sample_rate(), SAMPLE_RATE).astype(np.int16)
-    send_audio(sock, pcm_8k)
+    send_audio(sock, pcm_8k, lock)
 
 
 class CallHandler(socketserver.BaseRequestHandler):
@@ -101,8 +125,9 @@ class CallHandler(socketserver.BaseRequestHandler):
         call_id = str(uuid.UUID(bytes=payload)) if msg_type == MSG_UUID and len(payload) == 16 else "unknown"
         print(f"[call {call_id}] connected")
 
+        write_lock = threading.Lock()
         chat_history = []
-        speak(sock, CONSENT_DISCLOSURE)
+        speak(sock, CONSENT_DISCLOSURE, write_lock)
 
         speech_frames = []
         silence_run_ms = 0
@@ -138,21 +163,30 @@ class CallHandler(socketserver.BaseRequestHandler):
                 pcm_8k = np.frombuffer(b"".join(speech_frames), dtype="<i2")
                 speech_frames, silence_run_ms, started_speaking, utterance_ms = [], 0, False, 0
 
-                t0 = time.time()
-                pcm_16k_f32 = resample(pcm_8k, SAMPLE_RATE, 16000) / 32768.0
-                caller_text = pipeline.transcribe_pcm(pcm_16k_f32)
-                stt_elapsed = time.time() - t0
-                if not caller_text:
-                    continue
-                print(f"[call {call_id}] [STT {stt_elapsed:.2f}s] \"{caller_text}\"")
+                keepalive_stop = threading.Event()
+                keepalive_thread = threading.Thread(
+                    target=run_keepalive, args=(sock, write_lock, keepalive_stop), daemon=True
+                )
+                keepalive_thread.start()
+                try:
+                    t0 = time.time()
+                    pcm_16k_f32 = resample(pcm_8k, SAMPLE_RATE, 16000) / 32768.0
+                    caller_text = pipeline.transcribe_pcm(pcm_16k_f32)
+                    stt_elapsed = time.time() - t0
+                    if not caller_text:
+                        continue
+                    print(f"[call {call_id}] [STT {stt_elapsed:.2f}s] \"{caller_text}\"")
 
-                result = pipeline.generate_response(caller_text, chat_history=chat_history)
-                print(f"[call {call_id}] [LLM {result['elapsed']:.2f}s] "
-                      f"({'SUPPRESSED' if result['suppressed'] else 'reply'}) \"{result['reply']}\"")
-                chat_history.append({"role": "user", "content": caller_text})
-                chat_history.append({"role": "assistant", "content": result["reply"]})
+                    result = pipeline.generate_response(caller_text, chat_history=chat_history)
+                    print(f"[call {call_id}] [LLM {result['elapsed']:.2f}s] "
+                          f"({'SUPPRESSED' if result['suppressed'] else 'reply'}) \"{result['reply']}\"")
+                    chat_history.append({"role": "user", "content": caller_text})
+                    chat_history.append({"role": "assistant", "content": result["reply"]})
+                finally:
+                    keepalive_stop.set()
+                    keepalive_thread.join()
 
-                speak(sock, result["reply"])
+                speak(sock, result["reply"], write_lock)
                 if result["suppressed"]:
                     time.sleep(0.5)
                     break
