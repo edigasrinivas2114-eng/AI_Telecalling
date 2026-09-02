@@ -1,0 +1,10 @@
+# Phase-2 telephony bridge -- runs on your own machine/VM alongside Asterisk,
+# not in Colab. CPU-only by design (see pipeline.py for why).
+faster-whisper==1.2.1
+sentence-transformers==6.0.1
+chromadb==1.5.9
+piper-tts==1.7.0
+numpy==2.4.6
+scipy
+webrtcvad-wheels==2.0.14  # prebuilt wheels for webrtcvad (import name is still "webrtcvad") -- avoids needing a C compiler
+requests
