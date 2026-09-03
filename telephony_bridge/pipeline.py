@@ -24,6 +24,7 @@ from sentence_transformers import SentenceTransformer
 from programme_config import (
     CONSENT_DISCLOSURE,
     KNOWLEDGE_BASE,
+    OPT_OUT_REPLY,
     SYSTEM_PROMPT_TEMPLATE,
     is_opt_out_request,
 )
@@ -36,21 +37,34 @@ OLLAMA_MODEL = "qwen2.5:3b-instruct"  # small enough to run on CPU for testing
 # an already multi-second reply time.
 WHISPER_MODEL_SIZE = "medium"
 
-# libritts-high (not lessac-high): lessac's dataset license is "Research
-# Purposes" only and excludes commercial use, which matters once this is used
-# on real leads. libritts is CC-BY (commercial use fine with attribution) and
-# also sounds more natural at the "high" quality tier -- worth the extra
-# synthesis time. It's a multi-speaker model, so a speaker_id is required;
-# try other IDs (0-903) if you want a different voice within it.
-PIPER_MODEL_PATH = "piper_voices/en_US-libritts-high.onnx"
-PIPER_CONFIG_PATH = "piper_voices/en_US-libritts-high.onnx.json"
+# Telugu voice. NOTE: unverified filename -- huggingface.co was unreachable
+# from this environment to confirm directly, this is based on search evidence
+# (Piper's own VOICES.md lists Telugu voices "lalitha" and "prakash") plus
+# Piper's otherwise-consistent {lang}_{REGION}-{name}-{quality} naming. The
+# download step below asserts on file size, so a wrong URL fails loudly and
+# immediately rather than silently. Single-speaker voice, so no speaker_id
+# needed (PIPER_SPEAKER_ID is ignored for single-speaker models).
+PIPER_MODEL_PATH = "piper_voices/te_IN-lalitha-medium.onnx"
+PIPER_CONFIG_PATH = "piper_voices/te_IN-lalitha-medium.onnx.json"
 PIPER_SPEAKER_ID = 0
+
+# faster-whisper transcribes much more reliably when told the expected
+# language up front instead of auto-detecting it turn by turn.
+WHISPER_LANGUAGE = "te"
+
+# >1.0 = slower speech, <1.0 = faster. Piper's default (omitted) reads quite
+# fast for a phone call; 1.2 slows it down ~20%.
+PIPER_LENGTH_SCALE = 1.2
 
 print("Loading faster-whisper...")
 whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
 
 print("Loading embedder + knowledge base...")
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+# Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
+# an English-only embedder would badly mismatch a Telugu question against the
+# (English) knowledge base text, breaking retrieval and the grounding
+# requirement. This model covers Telugu among 50+ languages.
+embedder = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 chroma_client = chromadb.EphemeralClient()
 try:
     chroma_client.delete_collection("programme_kb")
@@ -77,7 +91,7 @@ def retrieve_context(query: str, k: int = 2) -> str:
 
 def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
     """pcm_16khz_f32: mono float32 samples in [-1, 1] at 16kHz."""
-    segments, _ = whisper_model.transcribe(pcm_16khz_f32, beam_size=5)
+    segments, _ = whisper_model.transcribe(pcm_16khz_f32, beam_size=5, language=WHISPER_LANGUAGE)
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
@@ -87,7 +101,7 @@ def generate_response(user_text: str, chat_history=None) -> dict:
 
     if is_opt_out_request(user_text):
         SUPPRESSION_LIST.append(user_text)
-        reply = "Understood, I'll make sure you're not contacted again. Take care!"
+        reply = OPT_OUT_REPLY
         return {"reply": reply, "suppressed": True, "elapsed": time.time() - t0}
 
     context_text = retrieve_context(user_text, k=2)
@@ -109,7 +123,7 @@ def generate_response(user_text: str, chat_history=None) -> dict:
     return {"reply": reply, "suppressed": False, "elapsed": time.time() - t0}
 
 
-_SYN_CONFIG = SynthesisConfig(speaker_id=PIPER_SPEAKER_ID)
+_SYN_CONFIG = SynthesisConfig(speaker_id=PIPER_SPEAKER_ID, length_scale=PIPER_LENGTH_SCALE)
 
 
 def synthesize_pcm(text: str) -> np.ndarray:

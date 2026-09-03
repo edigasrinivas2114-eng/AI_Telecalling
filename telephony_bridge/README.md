@@ -78,21 +78,37 @@ pip install -r requirements.txt
 
 ### 5. Get a Piper voice
 
-Using `en_US-libritts-high` here (not the notebook's `en_US-lessac-medium`): higher
-quality tier for a more natural sound, and CC-BY licensed so it's fine for commercial
-use -- `lessac`'s dataset license is research-only and excludes commercial use, which
-matters once this is used on real leads. It's a multi-speaker model (see
-`PIPER_SPEAKER_ID` in `pipeline.py` -- try other IDs 0-903 for a different voice).
+Currently configured for **Telugu** (`te_IN-lalitha-medium`) to match the SkilnQ script.
+NOTE: this exact filename is based on search evidence (Piper's own voice list mentions
+Telugu voices "lalitha" and "prakash"), not a directly-confirmed download -- the size
+check below will fail loudly and immediately if the URL is wrong, so try it and see:
 
 ```bash
 mkdir -p piper_voices
+curl -L -o piper_voices/te_IN-lalitha-medium.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/te/te_IN/lalitha/medium/te_IN-lalitha-medium.onnx
+curl -L -o piper_voices/te_IN-lalitha-medium.onnx.json \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/te/te_IN/lalitha/medium/te_IN-lalitha-medium.onnx.json
+# Sanity check -- both files should be well over a few hundred KB, not near-empty:
+ls -la piper_voices/
+```
+
+If that 404s, browse https://huggingface.co/rhasspy/piper-voices/tree/main/te in a
+browser to find the real path/filename, and update `PIPER_MODEL_PATH`/`PIPER_CONFIG_PATH`
+in `pipeline.py` to match -- or try `prakash` in place of `lalitha`.
+
+For an English voice instead (e.g. reverting away from Telugu), use `en_US-libritts-high`:
+higher quality tier for a more natural sound, and CC-BY licensed so it's fine for
+commercial use -- avoid `en_US-lessac-medium`, whose dataset license is research-only and
+excludes commercial use.
+```bash
 curl -L -o piper_voices/en_US-libritts-high.onnx \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx
 curl -L -o piper_voices/en_US-libritts-high.onnx.json \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json
-# Sanity check -- both files should be well over a few hundred KB, not near-empty:
-ls -la piper_voices/
 ```
+(It's a multi-speaker model -- see `PIPER_SPEAKER_ID` in `pipeline.py`, try other IDs 0-903
+for a different voice within it.)
 
 ### 6. Edit the programme details
 
