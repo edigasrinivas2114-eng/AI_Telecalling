@@ -1,62 +1,100 @@
 """Programme pitch details + knowledge base, shared by the phone bridge.
 
-Keep these in sync with the PROGRAMME_* variables in ai_telecaller_poc.ipynb --
-this is the phase-2 (live call) equivalent of that notebook's Section 2/3.
+Based on the SkilnQ AI Telecaller Call Script (Turns 1-5 + opt-out handling).
+The system prompt below encodes that script's flow as behavioral guidance for
+the LLM -- it adapts to what the caller actually says rather than reciting
+fixed lines, but is instructed to hit every point the script calls for.
+
+Deliberately left OUT of the knowledge base, per the script's own "open items
+to confirm" list: per-track duration/curriculum breakdown, batch start dates,
+and the certification name. The system prompt's hard rule against inventing
+facts means the AI will correctly say it'll confirm and follow up if asked
+about these -- fill them in below once confirmed instead of guessing.
+
+The script's opening also assumes a known lead name from a dialer/CRM ("am I
+speaking with [Lead Name]?"), which this test system doesn't have yet -- the
+AI asks for the caller's name instead.
 """
 
-# ============================================================
-# EDIT ME: real programme details go here (same values as the notebook)
-# ============================================================
-PROGRAMME_NAME = "Full-Stack AI Engineering Bootcamp"
-PROGRAMME_FEE = "INR 45,000 (plus applicable taxes)"
-PROGRAMME_DATES = "Batch starts 6 October 2026, runs for 8 weeks, weekday evenings 7-9 PM IST"
-PROGRAMME_DURATION = "8 weeks, 3 live sessions per week"
-PROGRAMME_CURRICULUM = [
-    "Python & ML fundamentals",
-    "LLM application development (RAG, agents, fine-tuning basics)",
-    "Deploying AI systems to production",
-    "Capstone project with mentor review",
+COMPANY_NAME = "SkilnQ"
+AGENT_DISPLAY_NAME = "Srinivas"
+
+FEE = "INR 25,000 (the same across all three tracks)"
+
+TRACKS = [
+    {
+        "id": "web",
+        "name": "Full Stack Web Development",
+        "description": "a solid foundation in building real web applications end to end",
+    },
+    {
+        "id": "ai",
+        "name": "Full Stack + AI",
+        "description": "the same web development core, with AI and ML layered in, for roles that blend both",
+    },
+    {
+        "id": "fabric",
+        "name": "Full Stack + Fabric",
+        "description": "web development combined with Microsoft Fabric, suited for data engineering and analytics-focused roles",
+    },
 ]
-CERTIFICATION_NAME = "Certificate of Completion, co-signed by RagaTech Source"
-COMPANY_NAME = "RagaTech Source"
-AGENT_DISPLAY_NAME = "Riya"
 
 CONSENT_DISCLOSURE = (
-    f"Hi, I'm {AGENT_DISPLAY_NAME}, an AI assistant with {COMPANY_NAME} -- quick heads up, "
-    "this call's recorded. Got a couple minutes to hear about a training programme we're running?"
+    f"Hi! This is {AGENT_DISPLAY_NAME}, an AI assistant calling from {COMPANY_NAME} -- "
+    "quick heads up, this call's recorded. Could I get your name, please?"
 )
 
-SYSTEM_PROMPT_TEMPLATE = f"""You are {AGENT_DISPLAY_NAME}, an AI voice agent for {COMPANY_NAME}, calling to \
-pitch the "{PROGRAMME_NAME}" training programme and gauge the caller's interest.
+SYSTEM_PROMPT_TEMPLATE = f"""You are {AGENT_DISPLAY_NAME}, an AI voice agent for {COMPANY_NAME}, an outbound \
+caller reaching leads who have shown interest in a training programme. Follow this call flow, \
+adapting naturally to what the caller actually says rather than reciting fixed lines -- but hit \
+every point the flow calls for.
 
-Rules you must always follow:
-1. The call opened with a clear disclosure that this is an AI-conducted, recorded call \
-(that disclosure has already been played to the caller -- do not repeat it unless asked).
-2. You will be given "RETRIEVED CONTEXT" before each caller message. When the caller asks \
-about the fee, dates/schedule, duration, curriculum, or certification, you MUST base your \
-answer ONLY on that retrieved context. If the retrieved context does not contain the answer, \
-say you'll confirm the detail and follow up -- NEVER invent or guess a fee, date, or \
-certification detail.
-3. For general questions unrelated to the programme, answer briefly and helpfully, then \
-steer the conversation back to the programme.
-4. Keep responses SHORT (1-2 sentences) -- this is a live phone call, not a written chat.
-5. Naturally probe the caller's level of interest as the conversation progresses.
-6. Be respectful of objections. If the caller is hesitant, answer their concern once; do not \
-pressure them repeatedly.
+The call opened with a greeting, a recording disclosure, and a request for the caller's name \
+(already played to the caller -- do not repeat it unless asked). Once they give their name, use \
+it naturally in later turns.
+
+CALL FLOW:
+1. Warm-up: ask if now's an okay time to walk them through {COMPANY_NAME}'s training tracks. If \
+they say they're busy or it's a bad time, ask when's better to call back, thank them, and end the \
+call politely -- do not pitch anything in that case.
+2. If they say they're not interested at this stage, thank them politely and end the call.
+3. The pitch (once they've said it's an okay time): explain there are three tracks --
+   - {TRACKS[0]['name']}: {TRACKS[0]['description']}
+   - {TRACKS[1]['name']}: {TRACKS[1]['description']}
+   - {TRACKS[2]['name']}: {TRACKS[2]['description']}
+   All three are priced at {FEE}, and {COMPANY_NAME}'s placement team actively works to get \
+graduates interview opportunities -- it's not just a certificate at the end.
+4. You will be given "RETRIEVED CONTEXT" before each caller message. Answer fee, dates, \
+curriculum, and certification questions ONLY from that context. If it doesn't cover what they \
+asked, say you'll confirm the detail and follow up -- NEVER invent or guess a fee, date, \
+curriculum detail, or certification name.
+5. Once they show interest in a specific track, confirm which track they'd like to go ahead with, \
+or offer to go over the other tracks again if they're unsure.
+6. If they want time to think, offer to share all three tracks' details over WhatsApp so they can \
+review them later.
+7. Handle objections (fee, doubts about outcomes) by acknowledging them, answering from retrieved \
+context, then gently returning to confirming which track they want.
+8. Close: once they're ready to proceed, tell them a {COMPANY_NAME} counselor will follow up \
+shortly to help them enroll in that track, thank them for their time, and end warmly.
+
+Keep responses SHORT (1-2 sentences) -- this is a live phone call, not a written chat.
 """
 
 KNOWLEDGE_BASE = [
-    {"id": "fee", "text": f"The fee for the {PROGRAMME_NAME} is {PROGRAMME_FEE}."},
-    {"id": "dates", "text": f"The {PROGRAMME_NAME} schedule: {PROGRAMME_DATES}."},
-    {"id": "duration", "text": f"The {PROGRAMME_NAME} duration and format: {PROGRAMME_DURATION}."},
-    {"id": "curriculum", "text": f"The {PROGRAMME_NAME} curriculum covers: " + "; ".join(PROGRAMME_CURRICULUM) + "."},
-    {"id": "certification", "text": f"On completing the {PROGRAMME_NAME}, participants receive: {CERTIFICATION_NAME}."},
+    {"id": "fee", "text": f"The fee for all three {COMPANY_NAME} tracks -- {TRACKS[0]['name']}, "
+                           f"{TRACKS[1]['name']}, and {TRACKS[2]['name']} -- is {FEE}."},
+    {"id": "track_web", "text": f"{TRACKS[0]['name']}: {TRACKS[0]['description']}."},
+    {"id": "track_ai", "text": f"{TRACKS[1]['name']}: {TRACKS[1]['description']}."},
+    {"id": "track_fabric", "text": f"{TRACKS[2]['name']}: {TRACKS[2]['description']}."},
+    {"id": "placement", "text": f"After completing training at {COMPANY_NAME}, the placement team "
+                                 "actively works to get graduates interview opportunities -- it's "
+                                 "not just a certificate at the end."},
 ]
 
 OPT_OUT_PHRASES = [
     "remove my number", "take me off", "stop calling", "don't call me", "do not call me",
-    "do not call", "unsubscribe", "opt out", "opt-out", "stop contacting", "remove me from",
-    "don't contact me", "do not contact me",
+    "do not call", "don't call again", "do not call again", "please don't call", "unsubscribe",
+    "opt out", "opt-out", "stop contacting", "remove me from", "don't contact me", "do not contact me",
 ]
 
 

@@ -87,11 +87,7 @@ def generate_response(user_text: str, chat_history=None) -> dict:
 
     if is_opt_out_request(user_text):
         SUPPRESSION_LIST.append(user_text)
-        reply = (
-            "Understood -- I've flagged this number to be removed from our calling list "
-            "immediately, and you will not receive further calls about this programme. "
-            "Sorry for the interruption, and thank you for your time."
-        )
+        reply = "Understood, I'll make sure you're not contacted again. Take care!"
         return {"reply": reply, "suppressed": True, "elapsed": time.time() - t0}
 
     context_text = retrieve_context(user_text, k=2)
