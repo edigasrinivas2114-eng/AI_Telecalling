@@ -18,7 +18,7 @@ import chromadb
 import numpy as np
 import requests
 from faster_whisper import WhisperModel
-from piper import PiperVoice
+from piper import PiperVoice, SynthesisConfig
 from sentence_transformers import SentenceTransformer
 
 from programme_config import (
@@ -31,9 +31,20 @@ from programme_config import (
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "qwen2.5:3b-instruct"  # small enough to run on CPU for testing
 
-WHISPER_MODEL_SIZE = "small"
-PIPER_MODEL_PATH = "piper_voices/en_US-lessac-medium.onnx"
-PIPER_CONFIG_PATH = "piper_voices/en_US-lessac-medium.onnx.json"
+# "medium" trades speed for accuracy vs "small" -- noticeably slower on CPU,
+# but mishears fewer words, which matters more than shaving a few seconds off
+# an already multi-second reply time.
+WHISPER_MODEL_SIZE = "medium"
+
+# libritts-high (not lessac-high): lessac's dataset license is "Research
+# Purposes" only and excludes commercial use, which matters once this is used
+# on real leads. libritts is CC-BY (commercial use fine with attribution) and
+# also sounds more natural at the "high" quality tier -- worth the extra
+# synthesis time. It's a multi-speaker model, so a speaker_id is required;
+# try other IDs (0-903) if you want a different voice within it.
+PIPER_MODEL_PATH = "piper_voices/en_US-libritts-high.onnx"
+PIPER_CONFIG_PATH = "piper_voices/en_US-libritts-high.onnx.json"
+PIPER_SPEAKER_ID = 0
 
 print("Loading faster-whisper...")
 whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
@@ -94,7 +105,7 @@ def generate_response(user_text: str, chat_history=None) -> dict:
     resp = requests.post(
         OLLAMA_URL,
         json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
-              "options": {"num_predict": 120, "temperature": 0.4}},
+              "options": {"num_predict": 60, "temperature": 0.4}},
         timeout=60,
     )
     resp.raise_for_status()
@@ -102,12 +113,15 @@ def generate_response(user_text: str, chat_history=None) -> dict:
     return {"reply": reply, "suppressed": False, "elapsed": time.time() - t0}
 
 
+_SYN_CONFIG = SynthesisConfig(speaker_id=PIPER_SPEAKER_ID)
+
+
 def synthesize_pcm(text: str) -> np.ndarray:
     """Returns mono int16 PCM samples at the voice's native sample rate (see
     piper_voice.config.sample_rate, typically 22050 Hz)."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav_file:
-        piper_voice.synthesize_wav(text, wav_file)
+        piper_voice.synthesize_wav(text, wav_file, syn_config=_SYN_CONFIG)
     buf.seek(0)
     with wave.open(buf, "rb") as wav_file:
         raw = wav_file.readframes(wav_file.getnframes())

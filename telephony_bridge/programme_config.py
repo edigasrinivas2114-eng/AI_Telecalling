@@ -22,10 +22,8 @@ COMPANY_NAME = "RagaTech Source"
 AGENT_DISPLAY_NAME = "Riya"
 
 CONSENT_DISCLOSURE = (
-    f"Hi, this is {AGENT_DISPLAY_NAME}, an AI assistant calling on behalf of {COMPANY_NAME}. "
-    "This call is being conducted by an AI system and is recorded for quality and training "
-    "purposes. Is it okay if I take a couple of minutes to tell you about a training "
-    "programme we're running?"
+    f"Hi, I'm {AGENT_DISPLAY_NAME}, an AI assistant with {COMPANY_NAME} -- quick heads up, "
+    "this call's recorded. Got a couple minutes to hear about a training programme we're running?"
 )
 
 SYSTEM_PROMPT_TEMPLATE = f"""You are {AGENT_DISPLAY_NAME}, an AI voice agent for {COMPANY_NAME}, calling to \
@@ -41,7 +39,7 @@ say you'll confirm the detail and follow up -- NEVER invent or guess a fee, date
 certification detail.
 3. For general questions unrelated to the programme, answer briefly and helpfully, then \
 steer the conversation back to the programme.
-4. Keep responses SHORT (1-3 sentences) -- this is a live phone call, not a written chat.
+4. Keep responses SHORT (1-2 sentences) -- this is a live phone call, not a written chat.
 5. Naturally probe the caller's level of interest as the conversation progresses.
 6. Be respectful of objections. If the caller is hesitant, answer their concern once; do not \
 pressure them repeatedly.

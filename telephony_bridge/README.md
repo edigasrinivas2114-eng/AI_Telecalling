@@ -76,14 +76,20 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
 
-### 5. Get a Piper voice (same as the notebook)
+### 5. Get a Piper voice
+
+Using `en_US-libritts-high` here (not the notebook's `en_US-lessac-medium`): higher
+quality tier for a more natural sound, and CC-BY licensed so it's fine for commercial
+use -- `lessac`'s dataset license is research-only and excludes commercial use, which
+matters once this is used on real leads. It's a multi-speaker model (see
+`PIPER_SPEAKER_ID` in `pipeline.py` -- try other IDs 0-903 for a different voice).
 
 ```bash
 mkdir -p piper_voices
-curl -L -o piper_voices/en_US-lessac-medium.onnx \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
-curl -L -o piper_voices/en_US-lessac-medium.onnx.json \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+curl -L -o piper_voices/en_US-libritts-high.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx
+curl -L -o piper_voices/en_US-libritts-high.onnx.json \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json
 # Sanity check -- both files should be well over a few hundred KB, not near-empty:
 ls -la piper_voices/
 ```
