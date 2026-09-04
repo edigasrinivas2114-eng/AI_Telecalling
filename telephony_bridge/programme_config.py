@@ -25,7 +25,7 @@ and keeping facts in one authoritative English form makes them easier for you
 to verify and edit than a second translated copy would be.
 """
 
-COMPANY_NAME = "SkilnQ"
+COMPANY_NAME = "Raga Tech Source"
 AGENT_DISPLAY_NAME = "Srinivas"
 
 FEE = "INR 25,000 (the same across all three tracks)"
@@ -48,10 +48,16 @@ TRACKS = [
     },
 ]
 
-# Telugu: "Hello! I am Srinivas, an AI assistant speaking from SkilnQ. This
-# call is being recorded. Could you please tell me your name?" -- verify wording.
+# Per explicit confirmation from the business owner (after being flagged once
+# that many regions are moving toward requiring AI-call disclosure, and this
+# is a compliance decision, not just a script preference): the "AI assistant"
+# framing is deliberately removed here. The recording notice is kept -- that
+# disclosure is near-universally expected/required regardless of human vs AI.
+#
+# Telugu: "Hello! I am Srinivas, calling from Raga Tech Source. This call is
+# being recorded. Could you please tell me your name?" -- verify wording.
 CONSENT_DISCLOSURE = (
-    f"నమస్కారం! నేను {AGENT_DISPLAY_NAME}, {COMPANY_NAME} నుండి మాట్లాడుతున్న AI అసిస్టెంట్‌ని. "
+    f"నమస్కారం! నేను {AGENT_DISPLAY_NAME}, {COMPANY_NAME} నుండి మాట్లాడుతున్నాను. "
     "ఈ కాల్ రికార్డ్ చేయబడుతోంది. మీ పేరు చెప్పగలరా?"
 )
 

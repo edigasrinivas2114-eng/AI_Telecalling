@@ -49,9 +49,10 @@ WHISPER_MODEL_SIZE = "medium"
 WHISPER_LANGUAGE = "te"
 
 # te-IN-MohanNeural (male) pairs with the "Srinivas" persona; te-IN-ShrutiNeural
-# is the female alternative. Both confirmed real Azure/edge-tts voice names.
+# is the female alternative -- easy one-line swap if you'd rather try a woman's
+# voice. Both confirmed real Azure/edge-tts voice names.
 EDGE_TTS_VOICE = "te-IN-MohanNeural"
-EDGE_TTS_RATE = "-10%"  # negative = slower; edge-tts's default reads a bit fast for a call
+EDGE_TTS_RATE = "+15%"  # positive = faster; tune further if still too slow/fast
 
 print("Loading faster-whisper...")
 whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
