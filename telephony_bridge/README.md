@@ -1,19 +1,24 @@
-# Phase 2 (testing): AI telecaller over a real phone call, $0 cost
+# Phase 2 (testing): AI telecaller over a real phone call
 
 This connects the same STT -> RAG -> LLM -> TTS idea from `ai_telecaller_poc.ipynb`
-to an actual phone call, using only free, self-hosted software. It does **not**
-need a real phone number: you register two free softphone apps to your own
-Asterisk server and call one from the other -- one call reaches the AI.
+to an actual phone call, using mostly free, self-hosted software (one exception below).
+It does **not** need a real phone number: you register two free softphone apps to your
+own Asterisk server and call one from the other -- one call reaches the AI.
 
 Runs on your own machine or a free-tier VM (e.g. Oracle Cloud Always Free) --
 **not** in Colab (Colab isn't reachable from the internet and isn't always-on,
 which a live call bridge needs).
 
-Why the LLM is different here than in the notebook: `bitsandbytes` 4-bit
-quantization needs a CUDA GPU. An always-on, free, self-hosted bridge won't
-have a GPU sitting idle for it, so this uses **Ollama** instead, which runs
-quantized models efficiently on CPU. Swap `OLLAMA_MODEL` in `pipeline.py` for
-a bigger model once you move this to a GPU host.
+Why the LLM is different here than in the notebook: this originally used Ollama
+running a small local model (qwen2.5:3b-instruct) on CPU, avoiding any cost or API
+key. In practice that was both too slow (15-25s+ per reply) and not reliably fluent
+in Telugu -- a small general-purpose open model at that size isn't a strong bet for
+a lower-resource language. This now uses the **Claude API** (`claude-haiku-4-5`)
+instead: fast (runs on real GPU infrastructure, not your CPU) and considerably more
+capable, at the cost of no longer being free/fully self-hosted for this one piece --
+it needs an Anthropic API key and has a real, if small, per-call cost (Haiku 4.5 is
+Anthropic's cheapest current model, priced for exactly this kind of short
+conversational turn). See setup step 3 below.
 
 Why TTS is different here than in the notebook: Piper's Telugu voices sound
 noticeably synthetic. This uses **edge-tts** instead -- free access to
@@ -26,7 +31,7 @@ Trade-off: each reply needs live internet access (Piper runs fully offline).
 - `bridge_service.py` -- the AudioSocket server: bridges live call audio to the
   STT/RAG/LLM/TTS pipeline.
 - `pipeline.py` -- STT (faster-whisper), RAG (Chroma + sentence-transformers),
-  LLM (Ollama), TTS (edge-tts / Microsoft neural voices).
+  LLM (Claude API), TTS (edge-tts / Microsoft neural voices).
 - `programme_config.py` -- the same editable programme pitch variables as the
   notebook. Edit the values here too.
 - `asterisk_config/pjsip_snippet.conf` -- two test SIP extensions (1000, 1001).
@@ -62,14 +67,21 @@ sudo asterisk -rx "pjsip reload"
 sudo asterisk -rx "dialplan reload"
 ```
 
-### 3. Install Ollama and pull a small model
+### 3. Get a Claude API key
 
+1. Go to https://console.anthropic.com/ and sign in (or create an account).
+2. Create an API key under **Settings -> API Keys**.
+3. **Never paste this key into a chat with me or commit it to git** -- set it as an
+   environment variable instead:
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5:3b-instruct
+echo 'export ANTHROPIC_API_KEY="your-key-here"' >> ~/.bashrc
+source ~/.bashrc
 ```
-Leave `ollama serve` running (the install script sets it up as a systemd
-service that starts automatically -- check with `systemctl status ollama`).
+The `anthropic` Python SDK (installed in the next step) reads this automatically --
+no code change needed if you rotate the key later, just update the env var and
+restart the bridge. This is a paid API (see the note at the top of this README) --
+`claude-haiku-4-5` is Anthropic's cheapest current model, but calls still cost
+something per use, unlike everything else in this project.
 
 ### 4. Install ffmpeg (needed to decode edge-tts's audio)
 
@@ -121,6 +133,9 @@ running `bridge_service.py` for STT/LLM timing and transcripts.
 
 ## Known limitations of this first version
 
+- LLM calls cost real money (Claude API, `claude-haiku-4-5`) and need internet
+  access + a valid `ANTHROPIC_API_KEY` -- this is the one piece of the stack
+  that isn't free/fully self-hosted, traded for actually being fast and fluent.
 - TTS needs live internet access (edge-tts calls out to Microsoft's service per
   reply) -- unlike Piper, it won't work fully offline. It's also an unofficial
   (if long-stable, widely used) way of reaching that service, not a supported

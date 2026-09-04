@@ -6,7 +6,7 @@ chromadb==1.5.9
 numpy==2.4.6
 scipy
 webrtcvad-wheels==2.0.14  # prebuilt wheels for webrtcvad (import name is still "webrtcvad") -- avoids needing a C compiler
-requests
+anthropic==1.3.0  # Claude API for the LLM -- needs ANTHROPIC_API_KEY set (see README); not free/local
 edge-tts==7.2.8  # free access to Microsoft's neural TTS voices, no API key/account needed
 pydub==0.25.1    # decodes edge-tts's mp3 output to raw PCM -- needs ffmpeg installed (see README)
 audioop-lts      # pydub's set_channels() needs the stdlib "audioop" module, removed in Python 3.13+;

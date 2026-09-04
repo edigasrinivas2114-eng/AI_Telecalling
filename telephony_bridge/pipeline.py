@@ -1,12 +1,17 @@
-"""STT -> RAG -> LLM (Ollama) -> TTS pipeline for live calls.
+"""STT -> RAG -> LLM (Claude) -> TTS pipeline for live calls.
 
-This is the phase-2, CPU-friendly counterpart to the Colab notebook's pipeline:
+This is the phase-2 counterpart to the Colab notebook's pipeline:
 - STT: faster-whisper (same as the notebook)
 - RAG: Chroma + sentence-transformers (same as the notebook)
-- LLM: Ollama instead of transformers+bitsandbytes -- bitsandbytes 4-bit needs a
-  CUDA GPU, which an always-on, free, self-hosted phone bridge won't have. Ollama
-  runs quantized models efficiently on CPU, which is what "free and always on"
-  requires. Swap OLLAMA_MODEL for a bigger model once this moves to a GPU host.
+- LLM: Claude API (claude-haiku-4-5) instead of a local model. The earlier
+  local-Ollama approach (qwen2.5:3b-instruct on CPU) was both too slow
+  (15-25s+ per reply) and not reliably fluent in Telugu -- a small
+  general-purpose open model at that size isn't a strong bet for a
+  lower-resource language. Claude's API runs on real GPU infrastructure (fast)
+  and Haiku 4.5 is capable and cheap. Tradeoff: no longer free/fully
+  self-hosted for this piece -- needs an ANTHROPIC_API_KEY and has a real,
+  if small, per-call cost. Requires the `anthropic` package and that env var
+  set (see README).
 - TTS: edge-tts (free access to Microsoft's neural voices -- no API key, no
   Azure account, no cost -- instead of Piper). Piper's Telugu voices are
   robotic-sounding; these are the same production-quality neural voices Azure
@@ -20,10 +25,10 @@ import asyncio
 import io
 import time
 
+import anthropic
 import chromadb
 import edge_tts
 import numpy as np
-import requests
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
 from sentence_transformers import SentenceTransformer
@@ -36,8 +41,13 @@ from programme_config import (
     is_opt_out_request,
 )
 
-OLLAMA_URL = "http://localhost:11434/api/chat"
-OLLAMA_MODEL = "qwen2.5:3b-instruct"  # small enough to run on CPU for testing
+# Fastest, cheapest current Claude model -- a good fit for short conversational
+# turns like this (short system prompt + short history + short reply), not a
+# "downgrade": the alternative it's replacing is a local 3B model, not a
+# bigger Claude model. Reads the API key from the ANTHROPIC_API_KEY env var --
+# never hardcode it here.
+ANTHROPIC_MODEL = "claude-haiku-4-5"
+anthropic_client = anthropic.Anthropic()
 
 # "medium" trades speed for accuracy vs "small" -- noticeably slower on CPU,
 # but mishears fewer words, which matters more than shaving a few seconds off
@@ -100,21 +110,36 @@ def generate_response(user_text: str, chat_history=None) -> dict:
         return {"reply": reply, "suppressed": True, "elapsed": time.time() - t0}
 
     context_text = retrieve_context(user_text, k=2)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT_TEMPLATE}]
-    messages += chat_history
+    messages = list(chat_history)
     messages.append({
         "role": "user",
         "content": f"RETRIEVED CONTEXT:\n{context_text}\n\nCALLER SAID: {user_text}",
     })
 
-    resp = requests.post(
-        OLLAMA_URL,
-        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
-              "options": {"num_predict": 60, "temperature": 0.4}},
-        timeout=60,
-    )
-    resp.raise_for_status()
-    reply = resp.json()["message"]["content"].strip()
+    # Telugu: "One moment, let me try that again." -- unverified wording (see
+    # the translation note at the top of programme_config.py), used only as a
+    # spoken fallback on API failure, never as text sent anywhere.
+    fallback_reply = "ఒక్క నిమిషం, మళ్ళీ ప్రయత్నిస్తాను."
+
+    try:
+        response = anthropic_client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=300,
+            temperature=0.4,
+            system=SYSTEM_PROMPT_TEMPLATE,
+            messages=messages,
+        )
+        reply = next((b.text for b in response.content if b.type == "text"), "").strip()
+    except anthropic.RateLimitError as e:
+        print(f"  [LLM ERROR] Claude API rate limited: {e.message}")
+        reply = fallback_reply
+    except anthropic.APIStatusError as e:
+        print(f"  [LLM ERROR] Claude API error {e.status_code}: {e.message}")
+        reply = fallback_reply
+    except anthropic.APIConnectionError:
+        print("  [LLM ERROR] Could not reach the Claude API (network issue)")
+        reply = fallback_reply
+
     return {"reply": reply, "suppressed": False, "elapsed": time.time() - t0}
 
 
