@@ -15,12 +15,18 @@ have a GPU sitting idle for it, so this uses **Ollama** instead, which runs
 quantized models efficiently on CPU. Swap `OLLAMA_MODEL` in `pipeline.py` for
 a bigger model once you move this to a GPU host.
 
+Why TTS is different here than in the notebook: Piper's Telugu voices sound
+noticeably synthetic. This uses **edge-tts** instead -- free access to
+Microsoft's production neural voices (the same ones Azure sells), reached via
+Microsoft Edge's "Read aloud" service, no API key or Azure account needed.
+Trade-off: each reply needs live internet access (Piper runs fully offline).
+
 ## What's in this folder
 
 - `bridge_service.py` -- the AudioSocket server: bridges live call audio to the
   STT/RAG/LLM/TTS pipeline.
 - `pipeline.py` -- STT (faster-whisper), RAG (Chroma + sentence-transformers),
-  LLM (Ollama), TTS (Piper).
+  LLM (Ollama), TTS (edge-tts / Microsoft neural voices).
 - `programme_config.py` -- the same editable programme pitch variables as the
   notebook. Edit the values here too.
 - `asterisk_config/pjsip_snippet.conf` -- two test SIP extensions (1000, 1001).
@@ -65,7 +71,13 @@ ollama pull qwen2.5:3b-instruct
 Leave `ollama serve` running (the install script sets it up as a systemd
 service that starts automatically -- check with `systemctl status ollama`).
 
-### 4. Install Python dependencies for the bridge
+### 4. Install ffmpeg (needed to decode edge-tts's audio)
+
+```bash
+sudo apt-get install -y ffmpeg
+```
+
+### 5. Install Python dependencies for the bridge
 
 ```bash
 cd telephony_bridge
@@ -76,36 +88,10 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
 
-### 5. Get a Piper voice
-
-Currently configured for **Telugu** (`te_IN-venkatesh-medium`) to match the SkilnQ script.
-Confirmed directly against the file browser at
-https://huggingface.co/rhasspy/piper-voices/tree/main/te/te_IN -- the three available
-Telugu speakers are `maya`, `padmavathi`, and `venkatesh`, all at `medium` quality. Swap
-`venkatesh` for `padmavathi` or `maya` below for a female voice (same path pattern).
-
-```bash
-mkdir -p piper_voices
-curl -L -o piper_voices/te_IN-venkatesh-medium.onnx \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/te/te_IN/venkatesh/medium/te_IN-venkatesh-medium.onnx
-curl -L -o piper_voices/te_IN-venkatesh-medium.onnx.json \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/te/te_IN/venkatesh/medium/te_IN-venkatesh-medium.onnx.json
-# Sanity check -- both files should be well over a few hundred KB, not near-empty:
-ls -la piper_voices/
-```
-
-For an English voice instead (e.g. reverting away from Telugu), use `en_US-libritts-high`:
-higher quality tier for a more natural sound, and CC-BY licensed so it's fine for
-commercial use -- avoid `en_US-lessac-medium`, whose dataset license is research-only and
-excludes commercial use.
-```bash
-curl -L -o piper_voices/en_US-libritts-high.onnx \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx
-curl -L -o piper_voices/en_US-libritts-high.onnx.json \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json
-```
-(It's a multi-speaker model -- see `PIPER_SPEAKER_ID` in `pipeline.py`, try other IDs 0-903
-for a different voice within it.)
+No voice file to download this time -- edge-tts fetches the voice live over the network on
+each call, using the voice name set in `pipeline.py` (`EDGE_TTS_VOICE`, currently
+`te-IN-MohanNeural`; swap to `te-IN-ShrutiNeural` for a female voice, or any other
+[Edge TTS voice name](https://github.com/rany2/edge-tts) for a different language).
 
 ### 6. Edit the programme details
 
@@ -135,6 +121,10 @@ running `bridge_service.py` for STT/LLM timing and transcripts.
 
 ## Known limitations of this first version
 
+- TTS needs live internet access (edge-tts calls out to Microsoft's service per
+  reply) -- unlike Piper, it won't work fully offline. It's also an unofficial
+  (if long-stable, widely used) way of reaching that service, not a supported
+  public API -- worth knowing if this ever needs a guaranteed SLA.
 - No barge-in: the AI finishes speaking before it listens again (talking over
   it won't interrupt it).
 - One thread per call -- fine for testing a handful of calls, not for scale.

@@ -113,8 +113,8 @@ def resample(int16_array: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
 
 def speak(sock: socket.socket, text: str, lock: threading.Lock):
     print(f"  [TTS] \"{text}\"")
-    pcm_native = pipeline.synthesize_pcm(text)
-    pcm_8k = resample(pcm_native, pipeline.piper_sample_rate(), SAMPLE_RATE).astype(np.int16)
+    pcm_native, native_rate = pipeline.synthesize_pcm(text)
+    pcm_8k = resample(pcm_native, native_rate, SAMPLE_RATE).astype(np.int16)
     send_audio(sock, pcm_8k, lock)
 
 

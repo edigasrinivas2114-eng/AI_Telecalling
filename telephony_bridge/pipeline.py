@@ -7,18 +7,25 @@ This is the phase-2, CPU-friendly counterpart to the Colab notebook's pipeline:
   CUDA GPU, which an always-on, free, self-hosted phone bridge won't have. Ollama
   runs quantized models efficiently on CPU, which is what "free and always on"
   requires. Swap OLLAMA_MODEL for a bigger model once this moves to a GPU host.
-- TTS: Piper (same as the notebook, already CPU-only)
+- TTS: edge-tts (free access to Microsoft's neural voices -- no API key, no
+  Azure account, no cost -- instead of Piper). Piper's Telugu voices are
+  robotic-sounding; these are the same production-quality neural voices Azure
+  sells, reached through Microsoft Edge's "Read aloud" service. This is an
+  unofficial (if long-stable and widely used) way of reaching that service,
+  and each call needs live internet access, unlike Piper's fully offline
+  synthesis.
 """
 
+import asyncio
 import io
 import time
-import wave
 
 import chromadb
+import edge_tts
 import numpy as np
 import requests
 from faster_whisper import WhisperModel
-from piper import PiperVoice, SynthesisConfig
+from pydub import AudioSegment
 from sentence_transformers import SentenceTransformer
 
 from programme_config import (
@@ -37,23 +44,14 @@ OLLAMA_MODEL = "qwen2.5:3b-instruct"  # small enough to run on CPU for testing
 # an already multi-second reply time.
 WHISPER_MODEL_SIZE = "medium"
 
-# Telugu voice, confirmed directly against the rhasspy/piper-voices file
-# browser (te/te_IN has three speakers: maya, padmavathi, venkatesh, all at
-# "medium" quality). venkatesh is male, pairing with the "Srinivas" persona --
-# swap to "padmavathi" or "maya" (same path pattern) for a female voice.
-# Single-speaker voice, so no speaker_id needed (PIPER_SPEAKER_ID is ignored
-# for single-speaker models).
-PIPER_MODEL_PATH = "piper_voices/te_IN-venkatesh-medium.onnx"
-PIPER_CONFIG_PATH = "piper_voices/te_IN-venkatesh-medium.onnx.json"
-PIPER_SPEAKER_ID = 0
-
 # faster-whisper transcribes much more reliably when told the expected
 # language up front instead of auto-detecting it turn by turn.
 WHISPER_LANGUAGE = "te"
 
-# >1.0 = slower speech, <1.0 = faster. Piper's default (omitted) reads quite
-# fast for a phone call; 1.2 slows it down ~20%.
-PIPER_LENGTH_SCALE = 1.2
+# te-IN-MohanNeural (male) pairs with the "Srinivas" persona; te-IN-ShrutiNeural
+# is the female alternative. Both confirmed real Azure/edge-tts voice names.
+EDGE_TTS_VOICE = "te-IN-MohanNeural"
+EDGE_TTS_RATE = "-10%"  # negative = slower; edge-tts's default reads a bit fast for a call
 
 print("Loading faster-whisper...")
 whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
@@ -75,9 +73,6 @@ kb_collection.add(
     documents=[d["text"] for d in KNOWLEDGE_BASE],
     embeddings=embedder.encode([d["text"] for d in KNOWLEDGE_BASE]).tolist(),
 )
-
-print("Loading Piper voice...")
-piper_voice = PiperVoice.load(PIPER_MODEL_PATH, config_path=PIPER_CONFIG_PATH, use_cuda=False)
 
 SUPPRESSION_LIST = []
 
@@ -122,20 +117,19 @@ def generate_response(user_text: str, chat_history=None) -> dict:
     return {"reply": reply, "suppressed": False, "elapsed": time.time() - t0}
 
 
-_SYN_CONFIG = SynthesisConfig(speaker_id=PIPER_SPEAKER_ID, length_scale=PIPER_LENGTH_SCALE)
+async def _edge_tts_mp3_bytes(text: str) -> bytes:
+    communicate = edge_tts.Communicate(text, EDGE_TTS_VOICE, rate=EDGE_TTS_RATE)
+    chunks = []
+    async for chunk in communicate.stream():
+        if chunk["type"] == "audio":
+            chunks.append(chunk["data"])
+    return b"".join(chunks)
 
 
-def synthesize_pcm(text: str) -> np.ndarray:
-    """Returns mono int16 PCM samples at the voice's native sample rate (see
-    piper_voice.config.sample_rate, typically 22050 Hz)."""
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wav_file:
-        piper_voice.synthesize_wav(text, wav_file, syn_config=_SYN_CONFIG)
-    buf.seek(0)
-    with wave.open(buf, "rb") as wav_file:
-        raw = wav_file.readframes(wav_file.getnframes())
-    return np.frombuffer(raw, dtype=np.int16)
-
-
-def piper_sample_rate() -> int:
-    return piper_voice.config.sample_rate
+def synthesize_pcm(text: str):
+    """Returns (mono int16 PCM samples, sample_rate) -- edge-tts's native
+    output rate, so callers must resample to whatever they actually need."""
+    mp3_bytes = asyncio.run(_edge_tts_mp3_bytes(text))
+    audio = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3").set_channels(1)
+    samples = np.array(audio.get_array_of_samples(), dtype=np.int16)
+    return samples, audio.frame_rate

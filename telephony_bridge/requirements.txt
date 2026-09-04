@@ -3,8 +3,13 @@
 faster-whisper==1.2.1
 sentence-transformers==6.0.1
 chromadb==1.5.9
-piper-tts==1.7.0
 numpy==2.4.6
 scipy
 webrtcvad-wheels==2.0.14  # prebuilt wheels for webrtcvad (import name is still "webrtcvad") -- avoids needing a C compiler
 requests
+edge-tts==7.2.8  # free access to Microsoft's neural TTS voices, no API key/account needed
+pydub==0.25.1    # decodes edge-tts's mp3 output to raw PCM -- needs ffmpeg installed (see README)
+audioop-lts      # pydub's set_channels() needs the stdlib "audioop" module, removed in Python 3.13+;
+                 # this restores it. No prebuilt wheel for plain (non free-threaded) Python 3.14 yet,
+                 # so pip will compile it from source -- needs build-essential + python3.14-dev,
+                 # which you should already have installed from an earlier step in this project.
