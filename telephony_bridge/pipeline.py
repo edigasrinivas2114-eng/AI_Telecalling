@@ -37,15 +37,14 @@ OLLAMA_MODEL = "qwen2.5:3b-instruct"  # small enough to run on CPU for testing
 # an already multi-second reply time.
 WHISPER_MODEL_SIZE = "medium"
 
-# Telugu voice. NOTE: unverified filename -- huggingface.co was unreachable
-# from this environment to confirm directly, this is based on search evidence
-# (Piper's own VOICES.md lists Telugu voices "lalitha" and "prakash") plus
-# Piper's otherwise-consistent {lang}_{REGION}-{name}-{quality} naming. The
-# download step below asserts on file size, so a wrong URL fails loudly and
-# immediately rather than silently. Single-speaker voice, so no speaker_id
-# needed (PIPER_SPEAKER_ID is ignored for single-speaker models).
-PIPER_MODEL_PATH = "piper_voices/te_IN-lalitha-medium.onnx"
-PIPER_CONFIG_PATH = "piper_voices/te_IN-lalitha-medium.onnx.json"
+# Telugu voice, confirmed directly against the rhasspy/piper-voices file
+# browser (te/te_IN has three speakers: maya, padmavathi, venkatesh, all at
+# "medium" quality). venkatesh is male, pairing with the "Srinivas" persona --
+# swap to "padmavathi" or "maya" (same path pattern) for a female voice.
+# Single-speaker voice, so no speaker_id needed (PIPER_SPEAKER_ID is ignored
+# for single-speaker models).
+PIPER_MODEL_PATH = "piper_voices/te_IN-venkatesh-medium.onnx"
+PIPER_CONFIG_PATH = "piper_voices/te_IN-venkatesh-medium.onnx.json"
 PIPER_SPEAKER_ID = 0
 
 # faster-whisper transcribes much more reliably when told the expected

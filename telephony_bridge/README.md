@@ -78,24 +78,21 @@ pip install -r requirements.txt
 
 ### 5. Get a Piper voice
 
-Currently configured for **Telugu** (`te_IN-lalitha-medium`) to match the SkilnQ script.
-NOTE: this exact filename is based on search evidence (Piper's own voice list mentions
-Telugu voices "lalitha" and "prakash"), not a directly-confirmed download -- the size
-check below will fail loudly and immediately if the URL is wrong, so try it and see:
+Currently configured for **Telugu** (`te_IN-venkatesh-medium`) to match the SkilnQ script.
+Confirmed directly against the file browser at
+https://huggingface.co/rhasspy/piper-voices/tree/main/te/te_IN -- the three available
+Telugu speakers are `maya`, `padmavathi`, and `venkatesh`, all at `medium` quality. Swap
+`venkatesh` for `padmavathi` or `maya` below for a female voice (same path pattern).
 
 ```bash
 mkdir -p piper_voices
-curl -L -o piper_voices/te_IN-lalitha-medium.onnx \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/te/te_IN/lalitha/medium/te_IN-lalitha-medium.onnx
-curl -L -o piper_voices/te_IN-lalitha-medium.onnx.json \
-  https://huggingface.co/rhasspy/piper-voices/resolve/main/te/te_IN/lalitha/medium/te_IN-lalitha-medium.onnx.json
+curl -L -o piper_voices/te_IN-venkatesh-medium.onnx \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/te/te_IN/venkatesh/medium/te_IN-venkatesh-medium.onnx
+curl -L -o piper_voices/te_IN-venkatesh-medium.onnx.json \
+  https://huggingface.co/rhasspy/piper-voices/resolve/main/te/te_IN/venkatesh/medium/te_IN-venkatesh-medium.onnx.json
 # Sanity check -- both files should be well over a few hundred KB, not near-empty:
 ls -la piper_voices/
 ```
-
-If that 404s, browse https://huggingface.co/rhasspy/piper-voices/tree/main/te in a
-browser to find the real path/filename, and update `PIPER_MODEL_PATH`/`PIPER_CONFIG_PATH`
-in `pipeline.py` to match -- or try `prakash` in place of `lalitha`.
 
 For an English voice instead (e.g. reverting away from Telugu), use `en_US-libritts-high`:
 higher quality tier for a more natural sound, and CC-BY licensed so it's fine for
