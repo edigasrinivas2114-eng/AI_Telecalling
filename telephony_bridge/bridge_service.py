@@ -52,7 +52,10 @@ MSG_UUID = 0x01
 MSG_DTMF = 0x03
 MSG_AUDIO = 0x10
 
-vad = webrtcvad.Vad(2)  # aggressiveness 0-3; 2 is a reasonable default for phone audio
+vad = webrtcvad.Vad(1)  # aggressiveness 0-3; 2 misclassified real speech as noise often enough
+                         # over the Zoiper->Asterisk->AudioSocket path (codec artifacts) that the
+                         # bridge captured near-nothing and looked like it "wasn't listening" -- 1
+                         # is more lenient about what counts as speech.
 
 
 def recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -112,9 +115,11 @@ def resample(int16_array: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
 
 
 def speak(sock: socket.socket, text: str, lock: threading.Lock):
-    print(f"  [TTS] \"{text}\"")
+    t0 = time.time()
     pcm_native, native_rate = pipeline.synthesize_pcm(text)
     pcm_8k = resample(pcm_native, native_rate, SAMPLE_RATE).astype(np.int16)
+    synth_elapsed = time.time() - t0
+    print(f"  [TTS {synth_elapsed:.2f}s] \"{text}\"")
     send_audio(sock, pcm_8k, lock)
 
 
@@ -161,6 +166,7 @@ class CallHandler(socketserver.BaseRequestHandler):
                     continue
 
                 pcm_8k = np.frombuffer(b"".join(speech_frames), dtype="<i2")
+                captured_ms = utterance_ms
                 speech_frames, silence_run_ms, started_speaking, utterance_ms = [], 0, False, 0
 
                 keepalive_stop = threading.Event()
@@ -174,8 +180,10 @@ class CallHandler(socketserver.BaseRequestHandler):
                     caller_text = pipeline.transcribe_pcm(pcm_16k_f32)
                     stt_elapsed = time.time() - t0
                     if not caller_text:
+                        print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms] "
+                              f"heard nothing usable -- check mic input / VAD sensitivity")
                         continue
-                    print(f"[call {call_id}] [STT {stt_elapsed:.2f}s] \"{caller_text}\"")
+                    print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms] \"{caller_text}\"")
 
                     result = pipeline.generate_response(caller_text, chat_history=chat_history)
                     print(f"[call {call_id}] [LLM {result['elapsed']:.2f}s] "

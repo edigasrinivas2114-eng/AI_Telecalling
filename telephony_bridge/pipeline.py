@@ -49,10 +49,12 @@ from programme_config import (
 ANTHROPIC_MODEL = "claude-haiku-4-5"
 anthropic_client = anthropic.Anthropic()
 
-# "medium" trades speed for accuracy vs "small" -- noticeably slower on CPU,
-# but mishears fewer words, which matters more than shaving a few seconds off
-# an already multi-second reply time.
-WHISPER_MODEL_SIZE = "medium"
+# "small" -- switched down from "medium": now that the LLM step is fast
+# (Claude API instead of a local model), Whisper's own CPU transcription time
+# became the dominant delay. "small" is noticeably faster on CPU for a modest
+# accuracy cost; re-promote to "medium" only if mishearing becomes the bigger
+# problem than speed.
+WHISPER_MODEL_SIZE = "small"
 
 # faster-whisper transcribes much more reliably when told the expected
 # language up front instead of auto-detecting it turn by turn.
@@ -96,7 +98,10 @@ def retrieve_context(query: str, k: int = 2) -> str:
 
 def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
     """pcm_16khz_f32: mono float32 samples in [-1, 1] at 16kHz."""
-    segments, _ = whisper_model.transcribe(pcm_16khz_f32, beam_size=5, language=WHISPER_LANGUAGE)
+    # beam_size=1 (greedy) instead of 5 -- another meaningful CPU speedup;
+    # combined with the "small" model above, both trade a little accuracy for
+    # speed now that speed is the reported problem.
+    segments, _ = whisper_model.transcribe(pcm_16khz_f32, beam_size=1, language=WHISPER_LANGUAGE)
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
