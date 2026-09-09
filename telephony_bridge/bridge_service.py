@@ -56,10 +56,12 @@ MSG_UUID = 0x01
 MSG_DTMF = 0x03
 MSG_AUDIO = 0x10
 
-vad = webrtcvad.Vad(1)  # aggressiveness 0-3; 2 misclassified real speech as noise often enough
-                         # over the Zoiper->Asterisk->AudioSocket path (codec artifacts) that the
-                         # bridge captured near-nothing and looked like it "wasn't listening" -- 1
-                         # is more lenient about what counts as speech.
+vad = webrtcvad.Vad(2)  # aggressiveness 0-3; back up from 1 -- real test calls showed the bridge
+                         # almost always capturing the full MAX_UTTERANCE_MS window on background
+                         # noise rather than finding 800ms of silence, producing short garbled
+                         # transcripts every turn. Whisper's own vad_filter (added since level 1 was
+                         # chosen) now handles the "real speech misread as noise" failure mode this
+                         # was originally lowered for, so the outer VAD can afford to be stricter.
 
 
 def recv_exact(sock: socket.socket, n: int) -> bytes:
