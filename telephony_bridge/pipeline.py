@@ -101,7 +101,14 @@ def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
     # beam_size=1 (greedy) instead of 5 -- another meaningful CPU speedup;
     # combined with the "small" model above, both trade a little accuracy for
     # speed now that speed is the reported problem.
-    segments, _ = whisper_model.transcribe(pcm_16khz_f32, beam_size=1, language=WHISPER_LANGUAGE)
+    # vad_filter=True -- faster-whisper's own internal (Silero) VAD, applied on
+    # top of the bridge's webrtcvad turn-detection. Without it, a captured clip
+    # that's mostly background noise/silence (a common false-positive from the
+    # bridge's more lenient VAD) makes Whisper hallucinate repeating gibberish
+    # instead of returning nothing -- this drops the non-speech portions first.
+    segments, _ = whisper_model.transcribe(
+        pcm_16khz_f32, beam_size=1, language=WHISPER_LANGUAGE, vad_filter=True,
+    )
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
@@ -127,10 +134,15 @@ def generate_response(user_text: str, chat_history=None) -> dict:
     fallback_reply = "ఒక్క నిమిషం, మళ్ళీ ప్రయత్నిస్తాను."
 
     try:
+        # No `temperature` kwarg -- the anthropic SDK version installed in at
+        # least one deployment environment for this project rejects it as an
+        # unexpected keyword (TypeError, before any network call), which was
+        # silently killing every reply. It's not needed: the system prompt
+        # already constrains tone/length, and this keeps the call portable
+        # across whatever anthropic version ends up installed.
         response = anthropic_client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=300,
-            temperature=0.4,
             system=SYSTEM_PROMPT_TEMPLATE,
             messages=messages,
         )
