@@ -38,7 +38,11 @@ SAMPLE_RATE = 8000          # AudioSocket's fixed rate
 FRAME_BYTES = 320           # 20ms of 8kHz 16-bit mono PCM
 FRAME_MS = 20
 SILENCE_MS_TO_END_TURN = 800
-MAX_UTTERANCE_MS = 15_000
+# Lowered from 15s -- a capture that runs this long is usually noise the VAD
+# misclassified as speech rather than a real long sentence, and letting
+# Whisper chew on 15s of noise is what caused 50+ second transcriptions.
+# Capping the capture window bounds the worst case regardless of audio content.
+MAX_UTTERANCE_MS = 8_000
 
 # Asterisk's AudioSocket app kills the call after ~2s of the bridge sending
 # nothing back, regardless of whether the call is otherwise still alive. STT+LLM

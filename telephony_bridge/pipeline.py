@@ -111,8 +111,14 @@ def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
     # that's mostly background noise/silence (a common false-positive from the
     # bridge's more lenient VAD) makes Whisper hallucinate repeating gibberish
     # instead of returning nothing -- this drops the non-speech portions first.
+    # condition_on_previous_text=False -- a bad/noisy clip can otherwise send
+    # Whisper into a repetition loop that feeds its own garbled output back in
+    # as context, making one transcription take 50+ seconds instead of a few;
+    # this keeps each segment decoded independently so a bad guess can't
+    # compound into a runaway decode.
     segments, _ = whisper_model.transcribe(
         pcm_16khz_f32, beam_size=1, language=WHISPER_LANGUAGE, vad_filter=True,
+        condition_on_previous_text=False,
     )
     return " ".join(seg.text.strip() for seg in segments).strip()
 
