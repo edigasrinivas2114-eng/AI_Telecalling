@@ -67,7 +67,12 @@ EDGE_TTS_VOICE = "te-IN-MohanNeural"
 EDGE_TTS_RATE = "+15%"  # positive = faster; tune further if still too slow/fast
 
 print("Loading faster-whisper...")
-whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+# cpu_threads=4 -- faster-whisper's default (0) leaves thread count to the
+# OS/OpenMP, which doesn't always use every core; this machine's CPU (a
+# quad-core Ryzen 5 7520U) has exactly 4, so pin it explicitly rather than
+# leave real throughput on the table. Bump this if running on a machine with
+# more cores.
+whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=4)
 
 print("Loading embedder + knowledge base...")
 # Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
