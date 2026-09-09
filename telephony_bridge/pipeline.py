@@ -58,12 +58,16 @@ WHISPER_MODEL_SIZE = "small"
 
 # faster-whisper transcribes much more reliably when told the expected
 # language up front instead of auto-detecting it turn by turn.
-WHISPER_LANGUAGE = "te"
+WHISPER_LANGUAGE = "en"
 
-# te-IN-MohanNeural (male) pairs with the "Srinivas" persona; te-IN-ShrutiNeural
-# is the female alternative -- easy one-line swap if you'd rather try a woman's
-# voice. Both confirmed real Azure/edge-tts voice names.
-EDGE_TTS_VOICE = "te-IN-MohanNeural"
+# Switched from Telugu to English -- Microsoft's Telugu neural voices still
+# sounded noticeably synthetic even at their best (edge-tts's default
+# rate/pitch), which is a real, current limitation of Telugu TTS quality
+# across every provider, not a config problem. English neural voices are
+# far more natural. en-IN-PrabhatNeural (male, Indian accent) pairs with the
+# "Srinivas" persona better than an en-US voice would; en-IN-NeerjaNeural is
+# the female alternative. Both confirmed real Azure/edge-tts voice names.
+EDGE_TTS_VOICE = "en-IN-PrabhatNeural"
 EDGE_TTS_RATE = "+15%"  # positive = faster; tune further if still too slow/fast
 
 print("Loading faster-whisper...")
@@ -139,10 +143,8 @@ def generate_response(user_text: str, chat_history=None) -> dict:
         "content": f"RETRIEVED CONTEXT:\n{context_text}\n\nCALLER SAID: {user_text}",
     })
 
-    # Telugu: "One moment, let me try that again." -- unverified wording (see
-    # the translation note at the top of programme_config.py), used only as a
-    # spoken fallback on API failure, never as text sent anywhere.
-    fallback_reply = "ఒక్క నిమిషం, మళ్ళీ ప్రయత్నిస్తాను."
+    # Spoken fallback on API failure only, never sent anywhere as text.
+    fallback_reply = "One moment, let me try that again."
 
     try:
         # No `temperature` kwarg -- the anthropic SDK version installed in at

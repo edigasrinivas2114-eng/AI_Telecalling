@@ -15,14 +15,12 @@ The script's opening also assumes a known lead name from a dialer/CRM ("am I
 speaking with [Lead Name]?"), which this test system doesn't have yet -- the
 AI asks for the caller's name instead.
 
-LANGUAGE NOTE: CONSENT_DISCLOSURE and OPT_OUT_REPLY below are translated into
-Telugu (I'm not a certified Telugu speaker/translator -- please have a native
-speaker check these two lines before relying on them for real calls; they are
-the only lines spoken verbatim, so accuracy there matters most). The rest of
-this file (system prompt, knowledge base) stays in English on purpose: the
-LLM is instructed to respond in Telugu regardless of the instruction language,
-and keeping facts in one authoritative English form makes them easier for you
-to verify and edit than a second translated copy would be.
+LANGUAGE NOTE: this project switched from Telugu to English -- Telugu TTS
+quality (even Microsoft's production neural voices) still sounded noticeably
+synthetic, which is a real, current limitation across every TTS provider for
+Telugu specifically, not something more config could fix. English neural
+voices sound far more natural, so CONSENT_DISCLOSURE, OPT_OUT_REPLY, and the
+system prompt's response-language instruction are all English now.
 """
 
 COMPANY_NAME = "Raga Tech Source"
@@ -54,15 +52,12 @@ TRACKS = [
 # framing is deliberately removed here. The recording notice is kept -- that
 # disclosure is near-universally expected/required regardless of human vs AI.
 #
-# Telugu: "Hello! I am Srinivas, calling from Raga Tech Source. This call is
-# being recorded. Could you please tell me your name?" -- verify wording.
 CONSENT_DISCLOSURE = (
-    f"నమస్కారం! నేను {AGENT_DISPLAY_NAME}, {COMPANY_NAME} నుండి మాట్లాడుతున్నాను. "
-    "ఈ కాల్ రికార్డ్ చేయబడుతోంది. మీ పేరు చెప్పగలరా?"
+    f"Hello! I'm {AGENT_DISPLAY_NAME}, calling from {COMPANY_NAME}. "
+    "This call is being recorded. Could you tell me your name, please?"
 )
 
-# Telugu: "Understood, we will not call you again. Thank you!" -- verify wording.
-OPT_OUT_REPLY = "అర్థమైంది, ఇకపై మీకు కాల్ చేయము. ధన్యవాదాలు!"
+OPT_OUT_REPLY = "Understood, we won't call you again. Thank you!"
 
 SYSTEM_PROMPT_TEMPLATE = f"""You are {AGENT_DISPLAY_NAME}, an AI voice agent for {COMPANY_NAME}, an outbound \
 caller reaching leads who have shown interest in a training programme. Follow this call flow, \
@@ -99,9 +94,7 @@ shortly to help them enroll in that track, thank them for their time, and end wa
 
 Keep responses SHORT (1-2 sentences) -- this is a live phone call, not a written chat.
 
-IMPORTANT: Respond ONLY in Telugu (తెలుగు) for every reply, even though these instructions are \
-in English. It's natural to keep company/track/product names (like {COMPANY_NAME} or "Full Stack \
-+ AI") in English within an otherwise-Telugu sentence, the way people actually speak.
+IMPORTANT: Respond ONLY in English for every reply.
 """
 
 KNOWLEDGE_BASE = [
@@ -119,9 +112,6 @@ OPT_OUT_PHRASES = [
     "remove my number", "take me off", "stop calling", "don't call me", "do not call me",
     "do not call", "don't call again", "do not call again", "please don't call", "unsubscribe",
     "opt out", "opt-out", "stop contacting", "remove me from", "don't contact me", "do not contact me",
-    # Telugu equivalents -- NOT verified by a native speaker, please check/expand these.
-    # Roughly: "don't call", "I don't want calls", "remove the number", "don't call again".
-    "కాల్ చేయవద్దు", "నాకు కాల్ వద్దు", "నంబర్ తీసేయండి", "మళ్ళీ కాల్ చేయవద్దు",
 ]
 
 

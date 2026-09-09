@@ -20,11 +20,16 @@ it needs an Anthropic API key and has a real, if small, per-call cost (Haiku 4.5
 Anthropic's cheapest current model, priced for exactly this kind of short
 conversational turn). See setup step 3 below.
 
-Why TTS is different here than in the notebook: Piper's Telugu voices sound
+Why TTS is different here than in the notebook: Piper's voices sound
 noticeably synthetic. This uses **edge-tts** instead -- free access to
 Microsoft's production neural voices (the same ones Azure sells), reached via
 Microsoft Edge's "Read aloud" service, no API key or Azure account needed.
 Trade-off: each reply needs live internet access (Piper runs fully offline).
+This project also tried Telugu end-to-end (STT, TTS, and LLM replies) for a
+while, but even Microsoft's best Telugu neural voices still sounded
+noticeably synthetic -- a real, current limitation of Telugu TTS quality
+across every provider, not a config issue. It now runs in English, where
+neural TTS quality is considerably more natural.
 
 ## What's in this folder
 
@@ -102,8 +107,11 @@ pip install -r requirements.txt
 
 No voice file to download this time -- edge-tts fetches the voice live over the network on
 each call, using the voice name set in `pipeline.py` (`EDGE_TTS_VOICE`, currently
-`te-IN-MohanNeural`; swap to `te-IN-ShrutiNeural` for a female voice, or any other
-[Edge TTS voice name](https://github.com/rany2/edge-tts) for a different language).
+`en-IN-PrabhatNeural`; swap to `en-IN-NeerjaNeural` for a female voice, or any other
+[Edge TTS voice name](https://github.com/rany2/edge-tts) for a different language). Run
+`edge-tts --list-voices` (after installing the deps below) to browse all available voices,
+and `edge-tts --voice <name> --text "..." --write-media sample.mp3` to preview one before
+committing to it.
 
 ### 6. Edit the programme details
 
