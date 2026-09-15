@@ -46,7 +46,15 @@ from programme_config import (
 # OpenAI-compatible API for every model it hosts, so this uses the `openai`
 # package pointed at OpenRouter's endpoint, not the native `anthropic`
 # package. Reads the key from OPENROUTER_API_KEY -- never hardcode it here.
-OPENROUTER_MODEL = "google/gemma-4-26b-a4b-it:free"
+# Switched from google/gemma-4-26b-a4b-it:free -- that model's free-tier pool
+# (shared across every OpenRouter user, not just this project) was returning
+# 429 rate-limit errors on nearly every call, being a well-known brand under
+# heavy demand. z-ai/glm-5.2:free is a solid general-purpose alternative
+# likely under less contention; re-test and swap again if this one also gets
+# rate-limited a lot -- that's an inherent risk of $0 shared-pool models, not
+# something fixable in code (the real fix is a paid key, or OpenRouter's BYOK
+# integration to use your own provider quota instead of the shared pool).
+OPENROUTER_MODEL = "z-ai/glm-5.2:free"
 openrouter_client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.environ["OPENROUTER_API_KEY"],
