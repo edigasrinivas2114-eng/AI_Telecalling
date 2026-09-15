@@ -1,17 +1,16 @@
-"""STT -> RAG -> LLM (Claude) -> TTS pipeline for live calls.
+"""STT -> RAG -> LLM (OpenRouter) -> TTS pipeline for live calls.
 
 This is the phase-2 counterpart to the Colab notebook's pipeline:
 - STT: faster-whisper (same as the notebook)
 - RAG: Chroma + sentence-transformers (same as the notebook)
-- LLM: Claude API (claude-haiku-4-5) instead of a local model. The earlier
-  local-Ollama approach (qwen2.5:3b-instruct on CPU) was both too slow
-  (15-25s+ per reply) and not reliably fluent in Telugu -- a small
-  general-purpose open model at that size isn't a strong bet for a
-  lower-resource language. Claude's API runs on real GPU infrastructure (fast)
-  and Haiku 4.5 is capable and cheap. Tradeoff: no longer free/fully
-  self-hosted for this piece -- needs an ANTHROPIC_API_KEY and has a real,
-  if small, per-call cost. Requires the `anthropic` package and that env var
-  set (see README).
+- LLM: a free model via OpenRouter (google/gemma-4-26b-a4b-it:free), reached
+  through the OpenAI-compatible client (OpenRouter exposes an OpenAI-style
+  API for every model it hosts, Claude included -- not the native `anthropic`
+  package). This was tested as a free alternative to the Claude API; Gemma
+  4's MoE variant here runs with only ~4B active parameters, so it should
+  still respond quickly even hosted for free. Needs an OPENROUTER_API_KEY env
+  var and the `openai` package (see README) -- swap OPENROUTER_MODEL below to
+  try a different OpenRouter model.
 - TTS: edge-tts (free access to Microsoft's neural voices -- no API key, no
   Azure account, no cost -- instead of Piper). Piper's Telugu voices are
   robotic-sounding; these are the same production-quality neural voices Azure
@@ -23,12 +22,13 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
 
 import asyncio
 import io
+import os
 import time
 
-import anthropic
 import chromadb
 import edge_tts
 import numpy as np
+import openai
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
 from sentence_transformers import SentenceTransformer
@@ -41,13 +41,16 @@ from programme_config import (
     is_opt_out_request,
 )
 
-# Fastest, cheapest current Claude model -- a good fit for short conversational
-# turns like this (short system prompt + short history + short reply), not a
-# "downgrade": the alternative it's replacing is a local 3B model, not a
-# bigger Claude model. Reads the API key from the ANTHROPIC_API_KEY env var --
-# never hardcode it here.
-ANTHROPIC_MODEL = "claude-haiku-4-5"
-anthropic_client = anthropic.Anthropic()
+# Free model via OpenRouter -- swap this string to try a different one from
+# https://openrouter.ai/models (filter to free). OpenRouter speaks the
+# OpenAI-compatible API for every model it hosts, so this uses the `openai`
+# package pointed at OpenRouter's endpoint, not the native `anthropic`
+# package. Reads the key from OPENROUTER_API_KEY -- never hardcode it here.
+OPENROUTER_MODEL = "google/gemma-4-26b-a4b-it:free"
+openrouter_client = openai.OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.environ["OPENROUTER_API_KEY"],
+)
 
 # "small" -- switched down from "medium": now that the LLM step is fast
 # (Claude API instead of a local model), Whisper's own CPU transcription time
@@ -147,27 +150,23 @@ def generate_response(user_text: str, chat_history=None) -> dict:
     fallback_reply = "One moment, let me try that again."
 
     try:
-        # No `temperature` kwarg -- the anthropic SDK version installed in at
-        # least one deployment environment for this project rejects it as an
-        # unexpected keyword (TypeError, before any network call), which was
-        # silently killing every reply. It's not needed: the system prompt
-        # already constrains tone/length, and this keeps the call portable
-        # across whatever anthropic version ends up installed.
-        response = anthropic_client.messages.create(
-            model=ANTHROPIC_MODEL,
+        # OpenAI-style chat payload: system prompt goes inside `messages` as
+        # its own entry (OpenRouter/OpenAI has no separate top-level `system`
+        # field the way the Anthropic API does).
+        response = openrouter_client.chat.completions.create(
+            model=OPENROUTER_MODEL,
             max_tokens=300,
-            system=SYSTEM_PROMPT_TEMPLATE,
-            messages=messages,
+            messages=[{"role": "system", "content": SYSTEM_PROMPT_TEMPLATE}] + messages,
         )
-        reply = next((b.text for b in response.content if b.type == "text"), "").strip()
-    except anthropic.RateLimitError as e:
-        print(f"  [LLM ERROR] Claude API rate limited: {e.message}")
+        reply = (response.choices[0].message.content or "").strip()
+    except openai.RateLimitError as e:
+        print(f"  [LLM ERROR] OpenRouter rate limited: {e}")
         reply = fallback_reply
-    except anthropic.APIStatusError as e:
-        print(f"  [LLM ERROR] Claude API error {e.status_code}: {e.message}")
+    except openai.APIStatusError as e:
+        print(f"  [LLM ERROR] OpenRouter API error {e.status_code}: {e.message}")
         reply = fallback_reply
-    except anthropic.APIConnectionError:
-        print("  [LLM ERROR] Could not reach the Claude API (network issue)")
+    except openai.APIConnectionError:
+        print("  [LLM ERROR] Could not reach OpenRouter (network issue)")
         reply = fallback_reply
 
     return {"reply": reply, "suppressed": False, "elapsed": time.time() - t0}

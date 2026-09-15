@@ -13,12 +13,15 @@ Why the LLM is different here than in the notebook: this originally used Ollama
 running a small local model (qwen2.5:3b-instruct) on CPU, avoiding any cost or API
 key. In practice that was both too slow (15-25s+ per reply) and not reliably fluent
 in Telugu -- a small general-purpose open model at that size isn't a strong bet for
-a lower-resource language. This now uses the **Claude API** (`claude-haiku-4-5`)
-instead: fast (runs on real GPU infrastructure, not your CPU) and considerably more
-capable, at the cost of no longer being free/fully self-hosted for this one piece --
-it needs an Anthropic API key and has a real, if small, per-call cost (Haiku 4.5 is
-Anthropic's cheapest current model, priced for exactly this kind of short
-conversational turn). See setup step 3 below.
+a lower-resource language. This then moved to the Claude API (`claude-haiku-4-5`):
+fast (runs on real GPU infrastructure, not your CPU) and considerably more capable,
+at the cost of a small per-call fee. It's since been switched again to **OpenRouter**
+(`google/gemma-4-26b-a4b-it:free`, reached through the OpenAI-compatible client,
+since OpenRouter exposes that API shape for every model it hosts) to test a fully
+free LLM option -- runs on OpenRouter's hosted infrastructure (not your CPU, so
+still fast) at no per-call cost. Swap `OPENROUTER_MODEL` in `pipeline.py` to try a
+different OpenRouter model, or point the code back at the Claude API if a free
+model's reply quality isn't good enough. See setup step 3 below.
 
 Why TTS is different here than in the notebook: Piper's voices sound
 noticeably synthetic. This uses **edge-tts** instead -- free access to
@@ -72,21 +75,24 @@ sudo asterisk -rx "pjsip reload"
 sudo asterisk -rx "dialplan reload"
 ```
 
-### 3. Get a Claude API key
+### 3. Get an OpenRouter API key
 
-1. Go to https://console.anthropic.com/ and sign in (or create an account).
-2. Create an API key under **Settings -> API Keys**.
+1. Go to https://openrouter.ai/ and sign in (or create an account).
+2. Create an API key under **API Keys -> Create Key**. The full key value is
+   shown only once, right when you create it -- copy it immediately.
 3. **Never paste this key into a chat with me or commit it to git** -- set it as an
    environment variable instead:
 ```bash
-echo 'export ANTHROPIC_API_KEY="your-key-here"' >> ~/.bashrc
+echo 'export OPENROUTER_API_KEY="your-key-here"' >> ~/.bashrc
 source ~/.bashrc
 ```
-The `anthropic` Python SDK (installed in the next step) reads this automatically --
+The `openai` Python package (installed in the next step, used here as an
+OpenAI-compatible client pointed at OpenRouter) reads this via `pipeline.py` --
 no code change needed if you rotate the key later, just update the env var and
-restart the bridge. This is a paid API (see the note at the top of this README) --
-`claude-haiku-4-5` is Anthropic's cheapest current model, but calls still cost
-something per use, unlike everything else in this project.
+restart the bridge. `pipeline.py`'s `OPENROUTER_MODEL` is currently set to a free
+model (`google/gemma-4-26b-a4b-it:free`), so this piece currently has no per-call
+cost -- browse https://openrouter.ai/models (filter to free) for other options,
+or swap back to the Claude API if a free model's reply quality isn't good enough.
 
 ### 4. Install ffmpeg (needed to decode edge-tts's audio)
 
