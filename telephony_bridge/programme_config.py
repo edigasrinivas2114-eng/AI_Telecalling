@@ -94,7 +94,9 @@ shortly to help them enroll in that track, thank them for their time, and end wa
 
 Keep responses SHORT (1-2 sentences) -- this is a live phone call, not a written chat.
 
-IMPORTANT: Respond ONLY in English for every reply.
+IMPORTANT: Respond ONLY in English for every reply. Never use markdown formatting \
+(asterisks, bullet points, headers, etc.) -- this reply is spoken aloud by a text-to-speech \
+voice, not displayed as text, so write it as plain spoken sentences.
 """
 
 KNOWLEDGE_BASE = [

@@ -25,6 +25,7 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
 import asyncio
 import io
 import os
+import re
 import time
 
 import chromadb
@@ -102,6 +103,15 @@ kb_collection.add(
 SUPPRESSION_LIST = []
 
 
+def _strip_markdown(text: str) -> str:
+    """Backstop for TTS: the system prompt tells the model not to use markdown,
+    but that's not guaranteed, and asterisks/headers read aloud sound wrong."""
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.*?)\*", r"\1", text)
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    return text.replace("*", "").replace("_", "")
+
+
 def retrieve_context(query: str, k: int = 2) -> str:
     q_emb = embedder.encode([query]).tolist()
     results = kb_collection.query(query_embeddings=q_emb, n_results=k)
@@ -158,7 +168,7 @@ def generate_response(user_text: str, chat_history=None) -> dict:
             max_tokens=300,
             messages=[{"role": "system", "content": SYSTEM_PROMPT_TEMPLATE}] + messages,
         )
-        reply = (response.choices[0].message.content or "").strip()
+        reply = _strip_markdown((response.choices[0].message.content or "").strip())
     except openai.RateLimitError as e:
         print(f"  [LLM ERROR] OpenRouter rate limited: {e}")
         reply = fallback_reply
