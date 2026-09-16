@@ -46,11 +46,14 @@ SAMPLE_RATE = 8000          # AudioSocket's fixed rate
 FRAME_BYTES = 320           # 20ms of 8kHz 16-bit mono PCM
 FRAME_MS = 20
 SILENCE_MS_TO_END_TURN = 800
-# Lowered from 15s -- a capture that runs this long is usually noise the VAD
-# misclassified as speech rather than a real long sentence, and letting
-# Whisper chew on 15s of noise is what caused 50+ second transcriptions.
-# Capping the capture window bounds the worst case regardless of audio content.
-MAX_UTTERANCE_MS = 8_000
+# Lowered again from 8s -- real test calls kept hitting this full cap even on
+# short replies like "thank you"/"bye", pointing to background noise keeping
+# the VAD's silence timer from ever resetting. Hosted Whisper doesn't have a
+# vad_filter equivalent to fall back on (unlike the old local setup), so a
+# long noisy capture doesn't just come back empty -- it hallucinates a full,
+# wrong-language sentence. A shorter cap bounds how much noise it can be
+# asked to make sense of.
+MAX_UTTERANCE_MS = 5_000
 
 # How many consecutive speech frames are needed before treating it as a
 # barge-in (interrupting the bot's current reply). Higher than the 1-frame

@@ -119,6 +119,16 @@ def retrieve_context(query: str, k: int = 2) -> str:
     return "\n".join(results["documents"][0])
 
 
+# Cyrillic (U+0400-04FF) and Devanagari (U+0900-097F) -- a Telugu- or
+# English-speaking caller can never genuinely produce either script. Real
+# test calls showed the hosted STT hallucinating full sentences in these
+# scripts on noisy/ambiguous clips (the `language` hint below doesn't fully
+# prevent this), so any transcription containing them is almost certainly
+# garbage, not real speech -- treat it as "heard nothing" rather than
+# passing hallucinated text to the LLM.
+_INVALID_SCRIPT_RE = re.compile(r"[Ѐ-ӿऀ-ॿ]")
+
+
 def _wav_bytes_from_pcm(pcm_16khz_f32: np.ndarray) -> bytes:
     """Hosted transcription needs an actual audio file, not a raw sample
     array -- wraps the same 16kHz mono float32 samples the old local-Whisper
@@ -160,7 +170,11 @@ def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
             timeout=STT_TIMEOUT_S,
         )
         response.raise_for_status()
-        return response.json().get("text", "").strip()
+        text = response.json().get("text", "").strip()
+        if _INVALID_SCRIPT_RE.search(text):
+            print(f"  [STT] discarding transcription in an impossible script: \"{text}\"")
+            return ""
+        return text
     except requests.exceptions.Timeout:
         print(f"  [STT] timed out after {STT_TIMEOUT_S}s -- abandoning this transcription")
         return ""
