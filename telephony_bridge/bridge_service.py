@@ -76,13 +76,13 @@ MSG_UUID = 0x01
 MSG_DTMF = 0x03
 MSG_AUDIO = 0x10
 
-vad = webrtcvad.Vad(3)  # aggressiveness 0-3, max strictness -- raised from 2 after testing with a
-                         # headset/earbuds (ruling out speaker/mic acoustic echo) still showed
-                         # frequent brief "speech" triggers from what's most likely ambient room
-                         # noise, plus one greeting getting interrupted almost immediately. Whisper's
-                         # own vad_filter already backstops the "real speech misread as noise"
-                         # failure mode this was previously tuned around, so the outer VAD can
-                         # afford to be as strict as possible about what counts as speech.
+vad = webrtcvad.Vad(2)  # aggressiveness 0-3 -- reverted from 3: real testing showed max
+                         # strictness stopped picking up real speech at all ("its not getting my
+                         # voice"), which is a worse failure mode for a phone bot than an
+                         # occasional false trigger from noise. 2 is the middle ground; the buffer
+                         # overrun bug (captured audio exceeding MAX_UTTERANCE_MS) fixed alongside
+                         # this was likely a bigger contributor to the STT slowness than VAD level
+                         # was anyway.
 
 
 def recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -166,6 +166,19 @@ def audio_reader(sock: socket.socket, state: CallState, call_id: str):
 
             is_speech = vad.is_speech(payload, SAMPLE_RATE)
             with state.lock:
+                # A completed turn is already waiting for the main thread to
+                # drain it (e.g. it's still busy running STT on the previous
+                # turn) -- stop growing this buffer further, or a slow main
+                # thread lets it balloon well past MAX_UTTERANCE_MS.
+                if state.turn_ready.is_set():
+                    if is_speech:
+                        state.consecutive_speech_frames += 1
+                        if state.consecutive_speech_frames >= BARGE_IN_SPEECH_FRAMES:
+                            state.barge_in.set()
+                    else:
+                        state.consecutive_speech_frames = 0
+                    continue
+
                 if is_speech:
                     state.consecutive_speech_frames += 1
                     state.speech_frames.append(payload)
