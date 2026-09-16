@@ -56,8 +56,13 @@ MAX_UTTERANCE_MS = 8_000
 # barge-in (interrupting the bot's current reply). Higher than the 1-frame
 # threshold used for normal turn-taking, since a false trip here cuts the bot
 # off mid-sentence for a stray noise blip rather than just starting to listen
-# a little early.
-BARGE_IN_SPEECH_FRAMES = 4  # 80ms
+# a little early. Raised from 4 (80ms) -- real testing showed every single
+# reply getting cut off almost instantly, which pointed to acoustic echo
+# (the test device's mic hearing its own speaker) rather than genuine
+# interruptions; a real fix for that is testing with a headset, but this adds
+# some margin regardless, since even genuine interruptions don't need an
+# 80ms trigger.
+BARGE_IN_SPEECH_FRAMES = 12  # 240ms
 
 # Asterisk's AudioSocket app kills the call after ~2s of the bridge sending
 # nothing back, regardless of whether the call is otherwise still alive. STT+LLM
