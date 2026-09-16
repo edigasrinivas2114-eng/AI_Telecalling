@@ -1,7 +1,17 @@
 """STT -> RAG -> LLM (Claude via OpenRouter) -> TTS pipeline for live calls.
 
 This is the phase-2 counterpart to the Colab notebook's pipeline:
-- STT: faster-whisper (same as the notebook)
+- STT: Whisper Large V3 Turbo, hosted via OpenRouter (`openai/whisper-large-v3-turbo`)
+  rather than faster-whisper running locally. Local Whisper on this machine's CPU
+  kept hitting slow/stuck transcriptions (occasionally 50-70+ seconds) that no
+  amount of tuning (smaller model, timeouts, VAD adjustments) fully resolved --
+  moving the compute to OpenRouter's hosted infrastructure removes that CPU
+  contention entirely. Same Whisper model family as before, so Telugu support
+  carries over. Billed against the OpenRouter credit balance, same account as
+  the LLM call below. POSTs directly to OpenRouter's transcription endpoint
+  (JSON body with base64-encoded WAV audio) since this shape is specific to
+  OpenRouter, not the same as the openai package's audio.transcriptions
+  helper (which expects multipart file upload).
 - RAG: Chroma + sentence-transformers (same as the notebook)
 - LLM: Claude Haiku 4.5, reached through OpenRouter (`anthropic/claude-haiku-4.5`)
   rather than the direct Anthropic API. OpenRouter exposes an OpenAI-compatible
@@ -26,18 +36,19 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
 """
 
 import asyncio
+import base64
 import io
+import json
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
+import wave
 
 import chromadb
 import edge_tts
 import numpy as np
 import openai
-from faster_whisper import WhisperModel
+import requests
 from pydub import AudioSegment
 from sentence_transformers import SentenceTransformer
 
@@ -58,16 +69,11 @@ openrouter_client = openai.OpenAI(
     api_key=os.environ["OPENROUTER_API_KEY"],
 )
 
-# "small" -- switched down from "medium": now that the LLM step is fast
-# (Claude API instead of a local model), Whisper's own CPU transcription time
-# became the dominant delay. "small" is noticeably faster on CPU for a modest
-# accuracy cost; re-promote to "medium" only if mishearing becomes the bigger
-# problem than speed.
-WHISPER_MODEL_SIZE = "small"
-
-# faster-whisper transcribes much more reliably when told the expected
-# language up front instead of auto-detecting it turn by turn.
-WHISPER_LANGUAGE = "te"
+# Hosted Whisper via OpenRouter -- see module docstring for why this replaced
+# local faster-whisper. Uses the same OPENROUTER_API_KEY as the LLM call.
+OPENROUTER_STT_MODEL = "openai/whisper-large-v3-turbo"
+OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
+STT_TIMEOUT_S = 15  # generous for a network call; hosted Whisper itself is very fast
 
 # Back to Telugu per explicit request -- te-IN-MohanNeural (male) pairs with
 # the "Srinivas" persona; te-IN-ShrutiNeural is the female alternative. Both
@@ -76,14 +82,6 @@ WHISPER_LANGUAGE = "te"
 # real limitation of Telugu TTS across every provider today.
 EDGE_TTS_VOICE = "te-IN-MohanNeural"
 EDGE_TTS_RATE = "+15%"  # positive = faster; tune further if still too slow/fast
-
-print("Loading faster-whisper...")
-# cpu_threads=4 -- faster-whisper's default (0) leaves thread count to the
-# OS/OpenMP, which doesn't always use every core; this machine's CPU (a
-# quad-core Ryzen 5 7520U) has exactly 4, so pin it explicitly rather than
-# leave real throughput on the table. Bump this if running on a machine with
-# more cores.
-whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=4)
 
 print("Loading embedder + knowledge base...")
 # Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
@@ -121,43 +119,45 @@ def retrieve_context(query: str, k: int = 2) -> str:
     return "\n".join(results["documents"][0])
 
 
-# Real test calls still occasionally hit a 50-70+ second transcription despite
-# vad_filter and condition_on_previous_text below (likely momentary CPU
-# contention from everything else running -- Asterisk, the embedder, network
-# calls -- rather than a pure decode loop). Rather than chase that further,
-# cap the worst case: a call that runs this long is abandoned and treated as
-# "heard nothing", instead of freezing the whole conversation for a minute.
-STT_TIMEOUT_S = 12
-_stt_executor = ThreadPoolExecutor(max_workers=2)
+def _wav_bytes_from_pcm(pcm_16khz_f32: np.ndarray) -> bytes:
+    """Hosted transcription needs an actual audio file, not a raw sample
+    array -- wraps the same 16kHz mono float32 samples the old local-Whisper
+    path used into an in-memory WAV container."""
+    pcm_int16 = np.clip(pcm_16khz_f32 * 32768.0, -32768, 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)  # 16-bit
+        wf.setframerate(16000)
+        wf.writeframes(pcm_int16.tobytes())
+    return buf.getvalue()
 
 
 def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
     """pcm_16khz_f32: mono float32 samples in [-1, 1] at 16kHz."""
-    def _run():
-        # beam_size=1 (greedy) instead of 5 -- another meaningful CPU speedup;
-        # combined with the "small" model above, both trade a little accuracy for
-        # speed now that speed is the reported problem.
-        # vad_filter=True -- faster-whisper's own internal (Silero) VAD, applied on
-        # top of the bridge's webrtcvad turn-detection. Without it, a captured clip
-        # that's mostly background noise/silence (a common false-positive from the
-        # bridge's more lenient VAD) makes Whisper hallucinate repeating gibberish
-        # instead of returning nothing -- this drops the non-speech portions first.
-        # condition_on_previous_text=False -- a bad/noisy clip can otherwise send
-        # Whisper into a repetition loop that feeds its own garbled output back in
-        # as context, making one transcription take 50+ seconds instead of a few;
-        # this keeps each segment decoded independently so a bad guess can't
-        # compound into a runaway decode.
-        segments, _ = whisper_model.transcribe(
-            pcm_16khz_f32, beam_size=1, language=WHISPER_LANGUAGE, vad_filter=True,
-            condition_on_previous_text=False,
-        )
-        return " ".join(seg.text.strip() for seg in segments).strip()
+    wav_bytes = _wav_bytes_from_pcm(pcm_16khz_f32)
+    b64_audio = base64.b64encode(wav_bytes).decode("utf-8")
 
-    future = _stt_executor.submit(_run)
     try:
-        return future.result(timeout=STT_TIMEOUT_S)
-    except FuturesTimeoutError:
+        response = requests.post(
+            url=OPENROUTER_STT_URL,
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+                "Content-Type": "application/json",
+            },
+            data=json.dumps({
+                "model": OPENROUTER_STT_MODEL,
+                "input_audio": {"data": b64_audio, "format": "wav"},
+            }),
+            timeout=STT_TIMEOUT_S,
+        )
+        response.raise_for_status()
+        return response.json().get("text", "").strip()
+    except requests.exceptions.Timeout:
         print(f"  [STT] timed out after {STT_TIMEOUT_S}s -- abandoning this transcription")
+        return ""
+    except requests.exceptions.RequestException as e:
+        print(f"  [STT ERROR] OpenRouter transcription failed: {e}")
         return ""
 
 

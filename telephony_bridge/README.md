@@ -38,8 +38,9 @@ neural TTS quality is considerably more natural.
 
 - `bridge_service.py` -- the AudioSocket server: bridges live call audio to the
   STT/RAG/LLM/TTS pipeline.
-- `pipeline.py` -- STT (faster-whisper), RAG (Chroma + sentence-transformers),
-  LLM (Claude API), TTS (edge-tts / Microsoft neural voices).
+- `pipeline.py` -- STT (Whisper Large V3 Turbo, hosted via OpenRouter), RAG
+  (Chroma + sentence-transformers), LLM (Claude Haiku 4.5 via OpenRouter),
+  TTS (edge-tts / Microsoft neural voices).
 - `programme_config.py` -- the same editable programme pitch variables as the
   notebook. Edit the values here too.
 - `asterisk_config/pjsip_snippet.conf` -- two test SIP extensions (1000, 1001).
@@ -107,14 +108,16 @@ sudo apt-get install -y ffmpeg
 cd telephony_bridge
 python3 -m venv venv
 source venv/bin/activate
-# CPU-only torch build first, to avoid pulling multi-GB CUDA packages you won't use:
+# CPU-only torch build first (needed by the sentence-transformers embedder), to avoid
+# pulling multi-GB CUDA packages you won't use -- speech-to-text no longer needs this,
+# it runs hosted via OpenRouter now, not locally:
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
 
 No voice file to download this time -- edge-tts fetches the voice live over the network on
 each call, using the voice name set in `pipeline.py` (`EDGE_TTS_VOICE`, currently
-`en-IN-PrabhatNeural`; swap to `en-IN-NeerjaNeural` for a female voice, or any other
+`te-IN-MohanNeural`; swap to `te-IN-ShrutiNeural` for a female voice, or any other
 [Edge TTS voice name](https://github.com/rany2/edge-tts) for a different language). Run
 `edge-tts --list-voices` (after installing the deps below) to browse all available voices,
 and `edge-tts --voice <name> --text "..." --write-media sample.mp3` to preview one before
@@ -148,9 +151,11 @@ running `bridge_service.py` for STT/LLM timing and transcripts.
 
 ## Known limitations of this first version
 
-- LLM calls cost real money (Claude Haiku 4.5 via OpenRouter) and need internet
-  access + a funded `OPENROUTER_API_KEY` -- this is the one piece of the stack
-  that isn't free/fully self-hosted, traded for actually being fast and fluent.
+- LLM and speech-to-text calls both cost real money now (Claude Haiku 4.5 and
+  Whisper Large V3 Turbo, both via OpenRouter) and need internet access + a
+  funded `OPENROUTER_API_KEY` -- STT moved off this machine's CPU specifically
+  because local transcription kept hitting unpredictable multi-second-to-a-minute
+  stalls; hosted Whisper trades a small per-call cost for reliability and speed.
 - TTS needs live internet access (edge-tts calls out to Microsoft's service per
   reply) -- unlike Piper, it won't work fully offline. It's also an unofficial
   (if long-stable, widely used) way of reaching that service, not a supported
