@@ -7,13 +7,21 @@ service's host:port (see asterisk_config/extensions_snippet.conf) and it will:
   3. Transcribe -> retrieve KB context -> generate a reply -> speak it back.
   4. Repeat until the caller hangs up.
 
+Barge-in: a single background thread reads every incoming audio frame for the
+whole life of the call (not just while "listening"), so it can tell the
+caller started talking even while the bot is mid-reply. When that happens,
+the bot's current reply is cut off immediately instead of blindly finishing
+the whole scripted line -- the caller's speech that triggered the interrupt
+is already being captured as the start of their next turn.
+
 Protocol reference: Asterisk AudioSocket sends/expects messages of
 [1-byte type][2-byte big-endian length][payload]:
   0x01 = UUID (16 bytes, sent once at call start)
   0x10 = audio (320 bytes = 20ms of 8kHz 16-bit mono PCM)
   0x00 = hangup/terminate (0-length payload)
 
-One thread per call -- fine for testing a handful of concurrent calls.
+One thread per call, plus one audio-reader thread per call -- fine for
+testing a handful of concurrent calls.
 """
 
 import math
@@ -43,6 +51,13 @@ SILENCE_MS_TO_END_TURN = 800
 # Whisper chew on 15s of noise is what caused 50+ second transcriptions.
 # Capping the capture window bounds the worst case regardless of audio content.
 MAX_UTTERANCE_MS = 8_000
+
+# How many consecutive speech frames are needed before treating it as a
+# barge-in (interrupting the bot's current reply). Higher than the 1-frame
+# threshold used for normal turn-taking, since a false trip here cuts the bot
+# off mid-sentence for a stray noise blip rather than just starting to listen
+# a little early.
+BARGE_IN_SPEECH_FRAMES = 4  # 80ms
 
 # Asterisk's AudioSocket app kills the call after ~2s of the bridge sending
 # nothing back, regardless of whether the call is otherwise still alive. STT+LLM
@@ -91,15 +106,6 @@ def send_audio_frame(sock: socket.socket, frame: bytes, lock: threading.Lock):
         sock.sendall(bytes([MSG_AUDIO]) + struct.pack(">H", len(frame)) + frame)
 
 
-def send_audio(sock: socket.socket, pcm_8k_int16: np.ndarray, lock: threading.Lock):
-    """Send int16 8kHz mono PCM as a sequence of 320-byte AudioSocket frames,
-    paced roughly in real time so Asterisk plays it back naturally."""
-    raw = pcm_8k_int16.astype("<i2").tobytes()
-    for i in range(0, len(raw), FRAME_BYTES):
-        send_audio_frame(sock, raw[i:i + FRAME_BYTES], lock)
-        time.sleep(FRAME_MS / 1000.0)
-
-
 def run_keepalive(sock: socket.socket, lock: threading.Lock, stop_event: threading.Event):
     """Sends silent audio frames until stop_event is set, to keep Asterisk's
     AudioSocket inactivity timeout from killing the call while we're busy
@@ -120,13 +126,85 @@ def resample(int16_array: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
     return np.clip(resampled, -32768, 32767)
 
 
-def speak(sock: socket.socket, text: str, lock: threading.Lock):
+class CallState:
+    """Shared, lock-protected state between the per-call audio-reader thread
+    and the main call-handling thread. The reader thread owns writes to the
+    turn-buffering fields; the main thread only reads them (after acquiring
+    the lock) when turn_ready fires."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.speech_frames = []
+        self.silence_run_ms = 0
+        self.started_speaking = False
+        self.utterance_ms = 0
+        self.consecutive_speech_frames = 0
+        self.turn_ready = threading.Event()   # a full turn (utterance) is ready for STT
+        self.barge_in = threading.Event()     # caller started talking -- cut off the current reply
+        self.hangup = threading.Event()
+
+
+def audio_reader(sock: socket.socket, state: CallState, call_id: str):
+    """Runs for the whole life of the call, not just while "listening" --
+    this is what makes barge-in possible: the caller's speech is captured and
+    turn-detected continuously, whether the bot is talking or silent."""
+    try:
+        while not state.hangup.is_set():
+            msg_type, payload = recv_message(sock)
+            if msg_type is None or msg_type == MSG_TERMINATE:
+                state.hangup.set()
+                state.turn_ready.set()  # wake the main thread so it can exit
+                break
+            if msg_type != MSG_AUDIO or len(payload) != FRAME_BYTES:
+                continue
+
+            is_speech = vad.is_speech(payload, SAMPLE_RATE)
+            with state.lock:
+                if is_speech:
+                    state.consecutive_speech_frames += 1
+                    state.speech_frames.append(payload)
+                    state.silence_run_ms = 0
+                    state.started_speaking = True
+                    state.utterance_ms += FRAME_MS
+                    if state.consecutive_speech_frames >= BARGE_IN_SPEECH_FRAMES:
+                        state.barge_in.set()
+                else:
+                    state.consecutive_speech_frames = 0
+                    if state.started_speaking:
+                        # keep a little trailing silence, sounds more natural
+                        state.speech_frames.append(payload)
+                        state.silence_run_ms += FRAME_MS
+                        state.utterance_ms += FRAME_MS
+
+                turn_done = state.started_speaking and (
+                    state.silence_run_ms >= SILENCE_MS_TO_END_TURN
+                    or state.utterance_ms >= MAX_UTTERANCE_MS
+                )
+                if turn_done:
+                    state.turn_ready.set()
+    except (ConnectionResetError, BrokenPipeError, OSError):
+        state.hangup.set()
+        state.turn_ready.set()
+
+
+def speak(sock: socket.socket, text: str, lock: threading.Lock, state: CallState) -> bool:
+    """Synthesizes and plays `text`, stopping early if the caller starts
+    talking (barge-in). Returns True if the reply was cut short."""
     t0 = time.time()
     pcm_native, native_rate = pipeline.synthesize_pcm(text)
     pcm_8k = resample(pcm_native, native_rate, SAMPLE_RATE).astype(np.int16)
     synth_elapsed = time.time() - t0
     print(f"  [TTS {synth_elapsed:.2f}s] \"{text}\"")
-    send_audio(sock, pcm_8k, lock)
+
+    state.barge_in.clear()
+    raw = pcm_8k.astype("<i2").tobytes()
+    for i in range(0, len(raw), FRAME_BYTES):
+        if state.barge_in.is_set():
+            print("  [TTS] interrupted -- caller started talking")
+            return True
+        send_audio_frame(sock, raw[i:i + FRAME_BYTES], lock)
+        time.sleep(FRAME_MS / 1000.0)
+    return False
 
 
 class CallHandler(socketserver.BaseRequestHandler):
@@ -138,42 +216,29 @@ class CallHandler(socketserver.BaseRequestHandler):
 
         write_lock = threading.Lock()
         chat_history = []
-        speak(sock, CONSENT_DISCLOSURE, write_lock)
+        state = CallState()
 
-        speech_frames = []
-        silence_run_ms = 0
-        started_speaking = False
-        utterance_ms = 0
+        reader_thread = threading.Thread(target=audio_reader, args=(sock, state, call_id), daemon=True)
+        reader_thread.start()
+
+        speak(sock, CONSENT_DISCLOSURE, write_lock, state)
 
         try:
-            while True:
-                msg_type, payload = recv_message(sock)
-                if msg_type is None or msg_type == MSG_TERMINATE:
+            while not state.hangup.is_set():
+                state.turn_ready.wait()
+                if state.hangup.is_set():
                     print(f"[call {call_id}] hangup")
                     break
-                if msg_type != MSG_AUDIO or len(payload) != FRAME_BYTES:
-                    continue
 
-                is_speech = vad.is_speech(payload, SAMPLE_RATE)
-                if is_speech:
-                    speech_frames.append(payload)
-                    silence_run_ms = 0
-                    started_speaking = True
-                    utterance_ms += FRAME_MS
-                elif started_speaking:
-                    speech_frames.append(payload)  # keep a little trailing silence, sounds more natural
-                    silence_run_ms += FRAME_MS
-                    utterance_ms += FRAME_MS
-
-                turn_done = started_speaking and (
-                    silence_run_ms >= SILENCE_MS_TO_END_TURN or utterance_ms >= MAX_UTTERANCE_MS
-                )
-                if not turn_done:
-                    continue
-
-                pcm_8k = np.frombuffer(b"".join(speech_frames), dtype="<i2")
-                captured_ms = utterance_ms
-                speech_frames, silence_run_ms, started_speaking, utterance_ms = [], 0, False, 0
+                with state.lock:
+                    pcm_8k = np.frombuffer(b"".join(state.speech_frames), dtype="<i2")
+                    captured_ms = state.utterance_ms
+                    state.speech_frames = []
+                    state.silence_run_ms = 0
+                    state.started_speaking = False
+                    state.utterance_ms = 0
+                    state.consecutive_speech_frames = 0
+                    state.turn_ready.clear()
 
                 keepalive_stop = threading.Event()
                 keepalive_thread = threading.Thread(
@@ -200,13 +265,14 @@ class CallHandler(socketserver.BaseRequestHandler):
                     keepalive_stop.set()
                     keepalive_thread.join()
 
-                speak(sock, result["reply"], write_lock)
+                speak(sock, result["reply"], write_lock, state)
                 if result["suppressed"]:
                     time.sleep(0.5)
                     break
         except (ConnectionResetError, BrokenPipeError):
             print(f"[call {call_id}] connection dropped")
         finally:
+            state.hangup.set()
             print(f"[call {call_id}] closed")
 
 

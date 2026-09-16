@@ -19,7 +19,10 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   sells, reached through Microsoft Edge's "Read aloud" service. This is an
   unofficial (if long-stable and widely used) way of reaching that service,
   and each call needs live internet access, unlike Piper's fully offline
-  synthesis.
+  synthesis. Switched back to Telugu per explicit request, after an earlier
+  English-only period -- Telugu neural voices (even Microsoft's) still sound
+  more synthetic than English ones, a real limitation across every TTS
+  provider, but real Telugu-speaking leads matter more than that gap.
 """
 
 import asyncio
@@ -62,16 +65,14 @@ WHISPER_MODEL_SIZE = "small"
 
 # faster-whisper transcribes much more reliably when told the expected
 # language up front instead of auto-detecting it turn by turn.
-WHISPER_LANGUAGE = "en"
+WHISPER_LANGUAGE = "te"
 
-# Switched from Telugu to English -- Microsoft's Telugu neural voices still
-# sounded noticeably synthetic even at their best (edge-tts's default
-# rate/pitch), which is a real, current limitation of Telugu TTS quality
-# across every provider, not a config problem. English neural voices are
-# far more natural. en-IN-PrabhatNeural (male, Indian accent) pairs with the
-# "Srinivas" persona better than an en-US voice would; en-IN-NeerjaNeural is
-# the female alternative. Both confirmed real Azure/edge-tts voice names.
-EDGE_TTS_VOICE = "en-IN-PrabhatNeural"
+# Back to Telugu per explicit request -- te-IN-MohanNeural (male) pairs with
+# the "Srinivas" persona; te-IN-ShrutiNeural is the female alternative. Both
+# confirmed real Azure/edge-tts voice names. Known tradeoff (see module
+# docstring): still more synthetic-sounding than English neural voices, a
+# real limitation of Telugu TTS across every provider today.
+EDGE_TTS_VOICE = "te-IN-MohanNeural"
 EDGE_TTS_RATE = "+15%"  # positive = faster; tune further if still too slow/fast
 
 print("Loading faster-whisper...")
@@ -156,8 +157,9 @@ def generate_response(user_text: str, chat_history=None) -> dict:
         "content": f"RETRIEVED CONTEXT:\n{context_text}\n\nCALLER SAID: {user_text}",
     })
 
-    # Spoken fallback on API failure only, never sent anywhere as text.
-    fallback_reply = "One moment, let me try that again."
+    # Telugu: "One moment, let me try that again." -- spoken fallback on API
+    # failure only, never sent anywhere as text.
+    fallback_reply = "ఒక్క నిమిషం, మళ్ళీ ప్రయత్నిస్తాను."
 
     try:
         # OpenAI-style chat payload: system prompt goes inside `messages` as

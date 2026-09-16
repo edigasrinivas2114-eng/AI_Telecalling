@@ -148,15 +148,18 @@ running `bridge_service.py` for STT/LLM timing and transcripts.
 
 ## Known limitations of this first version
 
-- LLM calls cost real money (Claude API, `claude-haiku-4-5`) and need internet
-  access + a valid `ANTHROPIC_API_KEY` -- this is the one piece of the stack
+- LLM calls cost real money (Claude Haiku 4.5 via OpenRouter) and need internet
+  access + a funded `OPENROUTER_API_KEY` -- this is the one piece of the stack
   that isn't free/fully self-hosted, traded for actually being fast and fluent.
 - TTS needs live internet access (edge-tts calls out to Microsoft's service per
   reply) -- unlike Piper, it won't work fully offline. It's also an unofficial
   (if long-stable, widely used) way of reaching that service, not a supported
   public API -- worth knowing if this ever needs a guaranteed SLA.
-- No barge-in: the AI finishes speaking before it listens again (talking over
-  it won't interrupt it).
+- Barge-in exists (the caller talking over the bot cuts its reply short) but
+  is tuned with a fixed threshold (`BARGE_IN_SPEECH_FRAMES` in
+  `bridge_service.py`) -- a brief cough or background noise could still
+  occasionally interrupt a reply; loosen/tighten that constant if it's too
+  trigger-happy or too slow to react.
 - One thread per call -- fine for testing a handful of calls, not for scale.
 - VAD-based turn detection is a fixed silence timeout (`SILENCE_MS_TO_END_TURN`
   in `bridge_service.py`), not adaptive -- tune it if it cuts callers off too
