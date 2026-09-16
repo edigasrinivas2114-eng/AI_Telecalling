@@ -1,14 +1,17 @@
 # Phase-2 telephony bridge -- runs on your own machine/VM alongside Asterisk,
-# not in Colab. CPU-only by design (see pipeline.py for why).
-faster-whisper==1.2.1  # local STT again -- temporary, while OpenRouter's hosted Whisper is
-                        # blocked on the same $0 account balance as the paid LLM (see pipeline.py)
+# not in Colab.
 sentence-transformers==6.0.1
 chromadb==1.5.9
 numpy==2.4.6
 scipy
 webrtcvad-wheels==2.0.14  # prebuilt wheels for webrtcvad (import name is still "webrtcvad") -- avoids needing a C compiler
 openai>=1.0.0     # used as an OpenAI-compatible client pointed at OpenRouter (not OpenAI itself) --
-                  # reaches the LLM via OpenRouter; needs OPENROUTER_API_KEY set (see README)
+                  # reaches Claude Haiku 4.5 via OpenRouter; needs OPENROUTER_API_KEY set (see README)
+requests          # raw HTTP call to OpenRouter's audio transcription endpoint (openai/whisper-large-v3-turbo) --
+                  # its request shape (JSON + base64 audio) doesn't match the openai package's
+                  # audio.transcriptions helper (which expects multipart file upload), so this
+                  # calls it directly instead. faster-whisper (local Whisper) removed -- STT now
+                  # runs hosted on OpenRouter, not on this machine's CPU (see pipeline.py for why).
 edge-tts==7.2.8  # free access to Microsoft's neural TTS voices, no API key/account needed
 pydub==0.25.1    # decodes edge-tts's mp3 output to raw PCM -- needs ffmpeg installed (see README)
 audioop-lts      # pydub's set_channels() needs the stdlib "audioop" module, removed in Python 3.13+;
