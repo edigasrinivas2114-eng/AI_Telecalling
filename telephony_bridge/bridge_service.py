@@ -76,12 +76,13 @@ MSG_UUID = 0x01
 MSG_DTMF = 0x03
 MSG_AUDIO = 0x10
 
-vad = webrtcvad.Vad(2)  # aggressiveness 0-3; back up from 1 -- real test calls showed the bridge
-                         # almost always capturing the full MAX_UTTERANCE_MS window on background
-                         # noise rather than finding 800ms of silence, producing short garbled
-                         # transcripts every turn. Whisper's own vad_filter (added since level 1 was
-                         # chosen) now handles the "real speech misread as noise" failure mode this
-                         # was originally lowered for, so the outer VAD can afford to be stricter.
+vad = webrtcvad.Vad(3)  # aggressiveness 0-3, max strictness -- raised from 2 after testing with a
+                         # headset/earbuds (ruling out speaker/mic acoustic echo) still showed
+                         # frequent brief "speech" triggers from what's most likely ambient room
+                         # noise, plus one greeting getting interrupted almost immediately. Whisper's
+                         # own vad_filter already backstops the "real speech misread as noise"
+                         # failure mode this was previously tuned around, so the outer VAD can
+                         # afford to be as strict as possible about what counts as speech.
 
 
 def recv_exact(sock: socket.socket, n: int) -> bytes:

@@ -30,6 +30,8 @@ import io
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import chromadb
 import edge_tts
@@ -119,26 +121,44 @@ def retrieve_context(query: str, k: int = 2) -> str:
     return "\n".join(results["documents"][0])
 
 
+# Real test calls still occasionally hit a 50-70+ second transcription despite
+# vad_filter and condition_on_previous_text below (likely momentary CPU
+# contention from everything else running -- Asterisk, the embedder, network
+# calls -- rather than a pure decode loop). Rather than chase that further,
+# cap the worst case: a call that runs this long is abandoned and treated as
+# "heard nothing", instead of freezing the whole conversation for a minute.
+STT_TIMEOUT_S = 12
+_stt_executor = ThreadPoolExecutor(max_workers=2)
+
+
 def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
     """pcm_16khz_f32: mono float32 samples in [-1, 1] at 16kHz."""
-    # beam_size=1 (greedy) instead of 5 -- another meaningful CPU speedup;
-    # combined with the "small" model above, both trade a little accuracy for
-    # speed now that speed is the reported problem.
-    # vad_filter=True -- faster-whisper's own internal (Silero) VAD, applied on
-    # top of the bridge's webrtcvad turn-detection. Without it, a captured clip
-    # that's mostly background noise/silence (a common false-positive from the
-    # bridge's more lenient VAD) makes Whisper hallucinate repeating gibberish
-    # instead of returning nothing -- this drops the non-speech portions first.
-    # condition_on_previous_text=False -- a bad/noisy clip can otherwise send
-    # Whisper into a repetition loop that feeds its own garbled output back in
-    # as context, making one transcription take 50+ seconds instead of a few;
-    # this keeps each segment decoded independently so a bad guess can't
-    # compound into a runaway decode.
-    segments, _ = whisper_model.transcribe(
-        pcm_16khz_f32, beam_size=1, language=WHISPER_LANGUAGE, vad_filter=True,
-        condition_on_previous_text=False,
-    )
-    return " ".join(seg.text.strip() for seg in segments).strip()
+    def _run():
+        # beam_size=1 (greedy) instead of 5 -- another meaningful CPU speedup;
+        # combined with the "small" model above, both trade a little accuracy for
+        # speed now that speed is the reported problem.
+        # vad_filter=True -- faster-whisper's own internal (Silero) VAD, applied on
+        # top of the bridge's webrtcvad turn-detection. Without it, a captured clip
+        # that's mostly background noise/silence (a common false-positive from the
+        # bridge's more lenient VAD) makes Whisper hallucinate repeating gibberish
+        # instead of returning nothing -- this drops the non-speech portions first.
+        # condition_on_previous_text=False -- a bad/noisy clip can otherwise send
+        # Whisper into a repetition loop that feeds its own garbled output back in
+        # as context, making one transcription take 50+ seconds instead of a few;
+        # this keeps each segment decoded independently so a bad guess can't
+        # compound into a runaway decode.
+        segments, _ = whisper_model.transcribe(
+            pcm_16khz_f32, beam_size=1, language=WHISPER_LANGUAGE, vad_filter=True,
+            condition_on_previous_text=False,
+        )
+        return " ".join(seg.text.strip() for seg in segments).strip()
+
+    future = _stt_executor.submit(_run)
+    try:
+        return future.result(timeout=STT_TIMEOUT_S)
+    except FuturesTimeoutError:
+        print(f"  [STT] timed out after {STT_TIMEOUT_S}s -- abandoning this transcription")
+        return ""
 
 
 def generate_response(user_text: str, chat_history=None) -> dict:
