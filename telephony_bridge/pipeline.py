@@ -162,14 +162,17 @@ def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
             data=json.dumps({
                 "model": OPENROUTER_STT_MODEL,
                 "input_audio": {"data": b64_audio, "format": "wav"},
-                # "te" (ISO-639-1) -- the standard Whisper language-hint param name;
+                # "en" (ISO-639-1) -- the standard Whisper language-hint param name;
                 # not confirmed against OpenRouter's own docs for this endpoint (the
                 # sample we had didn't show it), but without it short/ambiguous clips
-                # were being auto-detected as random languages/scripts (a Telugu
-                # greeting transcribed once in Cyrillic, once in English letters) --
-                # test this actually narrows it to Telugu; revert if it's ignored or
-                # causes errors.
-                "language": "te",
+                # were being auto-detected as random languages/scripts. Was "te" from
+                # when the script was in Telugu -- left stale after the switch to
+                # English (programme_config.py), which meant Whisper was being hinted
+                # toward the wrong language/script even on clear, loud English audio,
+                # producing empty or garbled-Telugu-script transcriptions instead of
+                # real English text. Keep this in sync with whatever language
+                # programme_config.py's SYSTEM_PROMPT_TEMPLATE actually uses.
+                "language": "en",
             }),
             timeout=STT_TIMEOUT_S,
         )
