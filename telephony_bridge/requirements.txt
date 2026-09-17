@@ -11,14 +11,11 @@ websockets>=12.0  # the bridge server itself -- Exotel's AgentStream connects ov
                   # TCP protocol. >=12.0 for the modern single-argument handler signature.
 openai>=1.0.0     # used as an OpenAI-compatible client pointed at OpenRouter (not OpenAI itself) --
                   # reaches Claude Haiku 4.5 via OpenRouter; needs OPENROUTER_API_KEY set (see README)
-requests          # raw HTTP call to OpenRouter's audio transcription endpoint
-                  # (openai/whisper-large-v3-turbo) -- its request shape doesn't
-                  # match the openai package's own audio helpers, so this calls
-                  # OpenRouter directly instead. faster-whisper removed -- STT
-                  # runs hosted on OpenRouter now (see pipeline.py for why).
-elevenlabs        # official SDK for ElevenLabs TTS (eleven_flash_v2_5, low-latency) --
-                  # a separate paid account/API key from OpenRouter, since ElevenLabs
-                  # isn't in OpenRouter's TTS catalog. Needs ELEVENLABS_API_KEY and
-                  # ELEVENLABS_VOICE_ID env vars (see README). Returns raw PCM directly
-                  # (pcm_16000 output format requested), so no decoding library
-                  # (pydub/ffmpeg) is needed for it either.
+requests          # raw HTTP calls to OpenRouter's audio transcription endpoint
+                  # (openai/whisper-large-v3-turbo) and speech endpoint
+                  # (deepgram/aura-2) -- neither request shape matches the openai
+                  # package's own audio helpers, so these call OpenRouter directly
+                  # instead. faster-whisper removed -- STT and TTS both run hosted
+                  # on OpenRouter now (see pipeline.py for why). The speech endpoint
+                  # returns raw PCM directly (no audio container), so no decoding
+                  # library (pydub/ffmpeg) is needed for it.
