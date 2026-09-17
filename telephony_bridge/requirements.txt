@@ -7,11 +7,17 @@ scipy
 webrtcvad-wheels==2.0.14  # prebuilt wheels for webrtcvad (import name is still "webrtcvad") -- avoids needing a C compiler
 openai>=1.0.0     # used as an OpenAI-compatible client pointed at OpenRouter (not OpenAI itself) --
                   # reaches Claude Haiku 4.5 via OpenRouter; needs OPENROUTER_API_KEY set (see README)
-requests          # raw HTTP calls to OpenRouter's audio transcription endpoint
-                  # (openai/whisper-large-v3-turbo) and speech endpoint
-                  # (google/gemini-3.1-flash-tts-preview) -- neither request shape matches
-                  # the openai package's own audio helpers, so these call OpenRouter
-                  # directly instead. faster-whisper and edge-tts both removed -- STT and
-                  # TTS now both run hosted on OpenRouter (see pipeline.py for why). The
-                  # speech endpoint returns raw PCM directly (no audio container), so no
-                  # decoding library (pydub/ffmpeg) is needed for it.
+requests          # raw HTTP call to OpenRouter's audio transcription endpoint
+                  # (openai/whisper-large-v3-turbo) -- its request shape (JSON with
+                  # base64-encoded WAV audio) doesn't match the openai package's own
+                  # audio helpers, so this calls OpenRouter directly instead.
+                  # faster-whisper removed -- STT runs hosted on OpenRouter now
+                  # (see pipeline.py for why).
+sarvamai>=0.1.29  # official SDK for Sarvam AI's Bulbul TTS (Indian-language-specialized,
+                  # Telugu included) -- replaced Gemini TTS via OpenRouter, which had
+                  # unconfirmed Telugu quality. >=0.1.29 because the SDK's own
+                  # text_to_speech.convert() parameter was renamed
+                  # target_language_code -> language_code in that release; pipeline.py
+                  # uses the new name. Needs a separate SARVAM_API_KEY env var (see
+                  # README) -- a different account/key from OpenRouter, since
+                  # OpenRouter doesn't host this model.

@@ -23,22 +23,25 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   provider). This paid model avoids the shared free-tier pool entirely.
   Needs an OPENROUTER_API_KEY env var with a funded OpenRouter credit balance
   (see README).
-- TTS: Google Gemini 3.1 Flash TTS Preview, hosted via OpenRouter
-  (`google/gemini-3.1-flash-tts-preview`), replacing edge-tts. This is a paid
-  model (billed against the same OpenRouter account as the LLM/STT above) --
-  chosen for its claimed 70+ language coverage, the broadest of any TTS model
-  found on OpenRouter, on the theory that this gives the best shot at
-  natural-sounding Telugu. Telugu support specifically was NOT confirmed
-  against Google's own documentation before switching (network access to
-  verify was blocked) -- if output sounds wrong/non-Telugu, that's the first
-  thing to check. POSTs directly to OpenRouter's speech endpoint
-  (`/audio/speech`, JSON body with `model`/`input`/`voice`). The response is
-  raw headerless PCM audio (`Content-Type: audio/pcm;rate=<N>;channels=<N>`),
-  NOT an mp3 container despite the sample code's `output.mp3` filename --
-  confirmed via direct testing (see `test_tts_direct.py`) after an earlier
-  version of this code force-decoded the response as mp3 and produced
-  garbage/silent audio on real calls. The actual rate/channel count is parsed
-  from the response's content-type header rather than assumed fixed.
+- TTS: Sarvam AI's Bulbul v3 (`bulbul:v3`), a text-to-speech model built and
+  trained specifically for Indian languages (11 of them, Telugu included),
+  reached through Sarvam's own API/SDK -- a separate paid account from
+  OpenRouter, since OpenRouter doesn't host any Telugu-specialized TTS model.
+  This replaced Google's Gemini 3.1 Flash TTS Preview (via OpenRouter), which
+  was a general-purpose multilingual model with unconfirmed Telugu quality --
+  Sarvam's whole product focus is Indian-language speech, a stronger bet for
+  this project's actual audience than a general model's broad language list.
+  Uses the official `sarvamai` Python SDK rather than raw HTTP calls, both
+  because Sarvam's own request/response field names have changed recently
+  (e.g. `target_language_code` -> `language_code`) and because the SDK
+  absorbs changes like that instead of this code needing to track them.
+  Requests audio at 8kHz directly (`speech_sample_rate=8000`) -- the same
+  rate AudioSocket needs -- since Sarvam is designed for telephony use and
+  should sound better tuned for 8kHz than a naive downsample from a higher
+  native rate would. The response is a genuine WAV container (unlike the
+  OpenRouter/Gemini endpoint this replaced, which claimed mp3 but actually
+  returned raw headerless PCM), so it's parsed with the stdlib `wave` module.
+  Needs a SARVAM_API_KEY env var (see README).
 """
 
 import base64
@@ -53,6 +56,7 @@ import chromadb
 import numpy as np
 import openai
 import requests
+from sarvamai import SarvamAI
 from sentence_transformers import SentenceTransformer
 
 from programme_config import (
@@ -78,17 +82,16 @@ OPENROUTER_STT_MODEL = "openai/whisper-large-v3-turbo"
 OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 STT_TIMEOUT_S = 15  # generous for a network call; hosted Whisper itself is very fast
 
-# Gemini TTS via OpenRouter -- see module docstring. "Zephyr" is one of
-# Gemini's ~30 voice names (confirmed valid from OpenRouter's own code
-# sample); these are language-agnostic character voices, not locale-specific
-# like edge-tts's te-IN-* names -- Gemini is expected to speak whatever
-# language the input text is in, so passing Telugu text should get Telugu
-# audio. Swap to a different voice name from Google's Gemini TTS voice list
-# if this one doesn't suit the "Srinivas" persona.
-OPENROUTER_TTS_MODEL = "google/gemini-3.1-flash-tts-preview"
-OPENROUTER_TTS_VOICE = "Zephyr"
-OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
-TTS_TIMEOUT_S = 15
+# Sarvam AI's Bulbul TTS -- see module docstring. A separate paid account
+# from OpenRouter; reads its own key from SARVAM_API_KEY (see README).
+# "anand" is one of bulbul:v3's ~39 speaker names, confirmed valid for this
+# model version (speaker names aren't interchangeable across bulbul
+# versions) -- picked as a male voice to fit the "Srinivas" persona, swap to
+# another name from Sarvam's voice list if it doesn't suit.
+SARVAM_TTS_MODEL = "bulbul:v3"
+SARVAM_TTS_SPEAKER = "anand"
+SARVAM_TTS_LANGUAGE_CODE = "te-IN"
+sarvam_client = SarvamAI(api_subscription_key=os.environ["SARVAM_API_KEY"])
 
 print("Loading embedder + knowledge base...")
 # Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
@@ -236,31 +239,20 @@ def generate_response(user_text: str, chat_history=None) -> dict:
 def synthesize_pcm(text: str):
     """Returns (mono int16 PCM samples, sample_rate) -- callers must resample
     to whatever they actually need."""
-    response = requests.post(
-        url=OPENROUTER_TTS_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": OPENROUTER_TTS_MODEL,
-            "input": text,
-            "voice": OPENROUTER_TTS_VOICE,
-        },
-        timeout=TTS_TIMEOUT_S,
+    response = sarvam_client.text_to_speech.convert(
+        text=text,
+        language_code=SARVAM_TTS_LANGUAGE_CODE,
+        model=SARVAM_TTS_MODEL,
+        speaker=SARVAM_TTS_SPEAKER,
+        speech_sample_rate=8000,  # matches AudioSocket's native rate -- no resampling needed
     )
-    response.raise_for_status()
+    audio_bytes = base64.b64decode(response.audios[0])
+    with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
+        sample_rate = wf.getframerate()
+        channels = wf.getnchannels()
+        pcm_bytes = wf.readframes(wf.getnframes())
 
-    # Raw headerless PCM, not an audio container -- see module docstring.
-    # Content-Type looks like "audio/pcm;rate=24000;channels=1"; parse the
-    # actual values instead of assuming them, in case they ever change.
-    content_type = response.headers.get("content-type", "")
-    rate_match = re.search(r"rate=(\d+)", content_type)
-    channels_match = re.search(r"channels=(\d+)", content_type)
-    sample_rate = int(rate_match.group(1)) if rate_match else 24000
-    channels = int(channels_match.group(1)) if channels_match else 1
-
-    samples = np.frombuffer(response.content, dtype="<i2")
+    samples = np.frombuffer(pcm_bytes, dtype="<i2")
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
     return samples, sample_rate
