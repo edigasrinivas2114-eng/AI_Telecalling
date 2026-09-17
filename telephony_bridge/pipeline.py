@@ -78,12 +78,15 @@ OPENROUTER_STT_MODEL = "openai/whisper-large-v3-turbo"
 OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 STT_TIMEOUT_S = 15  # generous for a network call; hosted Whisper itself is very fast
 
-# Deepgram Aura-2 via OpenRouter -- see module docstring. English-only.
-# "aura-2-arcas-en" is one of Aura-2's ~40 voice names (professional male,
-# to fit the "Srinivas" persona) -- confirmed valid via direct testing (see
-# test_deepgram_tts_direct.py). Same OPENROUTER_API_KEY as the LLM/STT.
+# Deepgram Aura-2 via OpenRouter -- see module docstring. English-only, and
+# Aura-2 has no Indian-English accent at all (only American, British,
+# Australian, Irish, Filipino) -- "aura-2-draco-en" is one of its British
+# male voices, picked over the earlier "aura-2-arcas-en" (American) on the
+# theory that British English pronunciation/vocabulary is generally more
+# familiar to Indian English speakers/listeners than American -- still not a
+# genuine Indian accent, which no OpenRouter TTS model currently offers.
 OPENROUTER_TTS_MODEL = "deepgram/aura-2"
-OPENROUTER_TTS_VOICE = "aura-2-arcas-en"
+OPENROUTER_TTS_VOICE = "aura-2-draco-en"
 OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
 TTS_TIMEOUT_S = 15
 
@@ -215,7 +218,11 @@ def generate_response(user_text: str, chat_history=None) -> dict:
         # field the way the Anthropic API does).
         response = openrouter_client.chat.completions.create(
             model=OPENROUTER_MODEL,
-            max_tokens=300,
+            # Lowered from 300 -- TTS synthesis time is roughly proportional to
+            # reply length (real test calls saw 16+ second TTS on the longest
+            # replies), so this caps worst-case latency as a backstop on top of
+            # the system prompt's own brevity instruction.
+            max_tokens=120,
             messages=[{"role": "system", "content": SYSTEM_PROMPT_TEMPLATE}] + messages,
         )
         reply = _strip_markdown((response.choices[0].message.content or "").strip())

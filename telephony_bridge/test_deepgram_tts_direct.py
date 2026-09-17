@@ -22,7 +22,9 @@ import requests
 
 OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
 OPENROUTER_TTS_MODEL = "deepgram/aura-2"
-OPENROUTER_TTS_VOICE = "aura-2-arcas-en"  # professional male voice; see Deepgram's Aura-2 voice list for others
+OPENROUTER_TTS_VOICE = "aura-2-draco-en"  # British male voice; edit this to try others, e.g.
+                                           # "aura-2-arcas-en" (American male), "aura-2-electra-en"
+                                           # (British female) -- see Deepgram's Aura-2 voice list
 
 text = "Hello! This is Srinivas, calling from Raga Tech Source. This call is being recorded. Could you tell me your name?"
 

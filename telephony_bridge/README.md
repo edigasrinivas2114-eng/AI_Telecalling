@@ -127,11 +127,12 @@ pip install -r requirements.txt
 
 No voice file to download this time -- the TTS request goes out live over the network on
 each call, using the voice name set in `pipeline.py` (`OPENROUTER_TTS_VOICE`, currently
-`"aura-2-arcas-en"`, one of Aura-2's ~40 voice names -- English-only, no other language
-available for this model). There's no local CLI to preview a voice before committing to
-it -- `test_deepgram_tts_direct.py` in this folder is a quick standalone script for that:
-edit the `text`/`voice` in it and run `python3 test_deepgram_tts_direct.py` to save an mp3
-you can listen to without needing a full test call.
+`"aura-2-draco-en"`, a British male voice -- one of Aura-2's ~40 voice names, English-only,
+no other language available for this model, and no Indian-English accent among its American/
+British/Australian/Irish/Filipino options either). There's no local CLI to preview a voice
+before committing to it -- `test_deepgram_tts_direct.py` in this folder is a quick standalone
+script for that: edit the `text`/`voice` in it and run `python3 test_deepgram_tts_direct.py`
+to save an mp3 you can listen to without needing a full test call.
 
 ### 4. Edit the programme details
 
