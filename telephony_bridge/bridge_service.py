@@ -1,39 +1,69 @@
-"""Asterisk AudioSocket <-> STT/RAG/LLM/TTS bridge.
+"""Exotel AgentStream (Voicebot Applet) <-> STT/RAG/LLM/TTS bridge.
 
-Run this alongside Asterisk. Point an AudioSocket() dialplan app at this
-service's host:port (see asterisk_config/extensions_snippet.conf) and it will:
+Replaces the earlier Asterisk AudioSocket bridge -- that setup kept hitting
+"one-way audio" (caller's mic reached the bridge fine, proven by working
+STT, but the bot's replies never reached the caller's ear, confirmed on two
+different audio devices including AirPods) that pointed to Asterisk's own
+SIP/RTP/NAT handling, not this code. Exotel is a cloud telephony provider:
+it terminates the actual phone call on its own infrastructure and connects
+to this bridge over a plain WebSocket, so there's no local SIP/RTP/NAT setup
+to get wrong. It's also India-focused (this business's actual market) with
+built-in DLT/TRAI compliance handling, unlike Asterisk (nothing) or Twilio
+(self-managed, and pricier for India-domestic calls).
+
+Run this service, expose it publicly (a real deployment, or `ngrok http
+8090` for local testing -- Exotel's cloud needs to reach this over the
+internet, unlike Asterisk which could run on the same LAN as the softphones),
+and point an Exotel Voicebot Applet at wss://<public-host>/?sample-rate=8000.
+It will:
   1. Play the consent disclosure as soon as the call connects.
   2. Buffer caller audio, use VAD to detect when they've finished a turn.
   3. Transcribe -> retrieve KB context -> generate a reply -> speak it back.
   4. Repeat until the caller hangs up.
 
-Barge-in: a single background thread reads every incoming audio frame for the
-whole life of the call (not just while "listening"), so it can tell the
-caller started talking even while the bot is mid-reply. When that happens,
-the bot's current reply is cut off immediately instead of blindly finishing
-the whole scripted line -- the caller's speech that triggered the interrupt
-is already being captured as the start of their next turn.
+Barge-in: a background task reads every incoming audio frame for the whole
+life of the call (not just while "listening"), so it can tell the caller
+started talking even while the bot is mid-reply. When that happens, the
+bot's current reply is cut off immediately (and an explicit "clear" event
+tells Exotel to drop whatever audio it has already buffered from us, rather
+than playing out a queued backlog after we've stopped sending) instead of
+blindly finishing the whole scripted line.
 
-Protocol reference: Asterisk AudioSocket sends/expects messages of
-[1-byte type][2-byte big-endian length][payload]:
-  0x01 = UUID (16 bytes, sent once at call start)
-  0x10 = audio (320 bytes = 20ms of 8kHz 16-bit mono PCM)
-  0x00 = hangup/terminate (0-length payload)
+Protocol reference (Exotel's AgentStream WebSocket protocol -- confirmed via
+Exotel's own published protocol doc and the pipecat-ai project's
+ExotelFrameSerializer, both independent of this codebase; the parsing below
+is deliberately defensive about exact field casing since neither source was
+directly testable before a real call, and logs any event it doesn't
+recognize so the parsing can be corrected against real traffic if needed):
+  Exotel -> bot, one JSON object per WebSocket text message:
+    {"event": "connected"}                                   -- handshake
+    {"event": "start", "start": {"streamSid": ..., "callSid": ...}, ...}
+    {"event": "media", "media": {"payload": "<base64 PCM>"}}
+    {"event": "dtmf", "dtmf": {"digit": "..."}}
+    {"event": "stop"}                                        -- call ended
+  bot -> Exotel:
+    {"event": "media", "stream_sid": ..., "media": {"payload": "<base64 PCM>"}}
+    {"event": "clear", "stream_sid": ...}                    -- barge-in
+  Audio is raw 16-bit linear PCM mono (not mu-law), sample rate configured
+  via the `?sample-rate=` query param on the WebSocket URL Exotel connects
+  to (this bridge expects 8000, matching AudioSocket's old fixed rate, so
+  none of the VAD/resampling logic below needed to change).
 
-One thread per call, plus one audio-reader thread per call -- fine for
-testing a handful of concurrent calls.
+One asyncio task pair per call (a reader task feeding VAD/turn-detection,
+and the main conversation task) -- fine for testing a handful of concurrent
+calls; pipeline.py's blocking network calls (STT/LLM/TTS) run via
+asyncio.to_thread() so they don't stall the event loop for other calls.
 """
 
+import asyncio
+import base64
+import json
 import math
-import socket
-import socketserver
-import struct
-import threading
 import time
-import uuid
 
 import numpy as np
 import webrtcvad
+import websockets
 from scipy.signal import resample_poly
 
 import pipeline
@@ -42,7 +72,7 @@ from programme_config import CONSENT_DISCLOSURE
 HOST = "0.0.0.0"
 PORT = 8090
 
-SAMPLE_RATE = 8000          # AudioSocket's fixed rate
+SAMPLE_RATE = 8000          # requested via ?sample-rate=8000 in the Exotel Voicebot Applet config
 FRAME_BYTES = 320           # 20ms of 8kHz 16-bit mono PCM
 FRAME_MS = 20
 SILENCE_MS_TO_END_TURN = 800
@@ -61,91 +91,25 @@ MAX_UTTERANCE_MS = 5_000
 # captures (peak under ~600) still got transcribed as confident-sounding text
 # like "Thank you." -- a well-known Whisper failure mode (hallucinating stock
 # phrases on silence, likely from YouTube-heavy training data). The script-
-# based hallucination filter below can't catch this since it's valid English,
-# not gibberish script. Skipping the STT call outright below this threshold
-# is safe given the size of the gap observed, and saves an API call too.
+# based hallucination filter in pipeline.py can't catch this since it's valid
+# English, not gibberish script. Skipping the STT call outright below this
+# threshold is safe given the size of the gap observed, and saves an API call.
 MIN_SPEECH_PEAK = 3000
 
 # How many consecutive speech frames are needed before treating it as a
 # barge-in (interrupting the bot's current reply). Higher than the 1-frame
 # threshold used for normal turn-taking, since a false trip here cuts the bot
 # off mid-sentence for a stray noise blip rather than just starting to listen
-# a little early. Raised from 4 (80ms) -- real testing showed every single
-# reply getting cut off almost instantly, which pointed to acoustic echo
-# (the test device's mic hearing its own speaker) rather than genuine
-# interruptions; a real fix for that is testing with a headset, but this adds
-# some margin regardless, since even genuine interruptions don't need an
-# 80ms trigger.
+# a little early.
 BARGE_IN_SPEECH_FRAMES = 12  # 240ms
 
 # Ignore barge-in entirely for the first stretch of each reply. A genuine
 # caller interruption doesn't happen in the very first fraction of a second
-# of the bot starting to talk -- real test calls showed every single reply
-# getting cut short almost immediately, which BARGE_IN_SPEECH_FRAMES alone
-# didn't fix (acoustic echo/ambient noise can still rack up 240ms of
-# VAD-flagged "speech" within a second or two of playback starting). This
-# grace period is a second line of defense on top of that, not a substitute
-# for testing with a headset if echo turns out to be the actual cause.
+# of the bot starting to talk.
 BARGE_IN_GRACE_MS = 500
 
-# Asterisk's AudioSocket app kills the call after ~2s of the bridge sending
-# nothing back, regardless of whether the call is otherwise still alive. STT+LLM
-# on CPU routinely take longer than that, so a keepalive thread sends silent
-# frames at this interval (well under the 2s cutoff) while a reply is being
-# generated, and stops as soon as the real reply audio is ready to send.
-KEEPALIVE_INTERVAL_S = 0.5
-
-MSG_TERMINATE = 0x00
-MSG_UUID = 0x01
-MSG_DTMF = 0x03
-MSG_AUDIO = 0x10
-
-vad = webrtcvad.Vad(2)  # aggressiveness 0-3 -- reverted from 3: real testing showed max
-                         # strictness stopped picking up real speech at all ("its not getting my
-                         # voice"), which is a worse failure mode for a phone bot than an
-                         # occasional false trigger from noise. 2 is the middle ground; the buffer
-                         # overrun bug (captured audio exceeding MAX_UTTERANCE_MS) fixed alongside
-                         # this was likely a bigger contributor to the STT slowness than VAD level
-                         # was anyway.
-
-
-def recv_exact(sock: socket.socket, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            return b""
-        buf += chunk
-    return buf
-
-
-def recv_message(sock: socket.socket):
-    header = recv_exact(sock, 3)
-    if len(header) < 3:
-        return None, None
-    msg_type = header[0]
-    (length,) = struct.unpack(">H", header[1:3])
-    payload = recv_exact(sock, length) if length else b""
-    return msg_type, payload
-
-
-def send_audio_frame(sock: socket.socket, frame: bytes, lock: threading.Lock):
-    if len(frame) < FRAME_BYTES:
-        frame = frame + b"\x00" * (FRAME_BYTES - len(frame))
-    with lock:
-        sock.sendall(bytes([MSG_AUDIO]) + struct.pack(">H", len(frame)) + frame)
-
-
-def run_keepalive(sock: socket.socket, lock: threading.Lock, stop_event: threading.Event):
-    """Sends silent audio frames until stop_event is set, to keep Asterisk's
-    AudioSocket inactivity timeout from killing the call while we're busy
-    running STT/LLM/TTS."""
-    silence = b"\x00" * FRAME_BYTES
-    while not stop_event.wait(KEEPALIVE_INTERVAL_S):
-        try:
-            send_audio_frame(sock, silence, lock)
-        except (ConnectionResetError, BrokenPipeError, OSError):
-            return
+vad = webrtcvad.Vad(2)  # aggressiveness 0-3 -- 2 is the middle ground; 3 was too strict
+                         # and missed real speech entirely in real testing.
 
 
 def resample(int16_array: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
@@ -157,102 +121,136 @@ def resample(int16_array: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarra
 
 
 class CallState:
-    """Shared, lock-protected state between the per-call audio-reader thread
-    and the main call-handling thread. The reader thread owns writes to the
-    turn-buffering fields; the main thread only reads them (after acquiring
-    the lock) when turn_ready fires."""
+    """Shared state between the per-call reader task (owns writes to the
+    turn-buffering fields, driven by incoming "media" events) and the main
+    conversation task (only reads them, after turn_ready fires). A single
+    asyncio task reads the websocket at a time, so no lock is needed the way
+    the old thread-based version required."""
 
     def __init__(self):
-        self.lock = threading.Lock()
+        self.stream_sid = None
+        self.call_id = "unknown"
         self.speech_frames = []
         self.silence_run_ms = 0
         self.started_speaking = False
         self.utterance_ms = 0
         self.consecutive_speech_frames = 0
-        self.turn_ready = threading.Event()   # a full turn (utterance) is ready for STT
-        self.barge_in = threading.Event()     # caller started talking -- cut off the current reply
-        self.hangup = threading.Event()
+        self.started = asyncio.Event()    # the "start" event has been parsed (stream_sid/call_id ready)
+        self.turn_ready = asyncio.Event()  # a full turn (utterance) is ready for STT
+        self.barge_in = asyncio.Event()    # caller started talking -- cut off the current reply
+        self.hangup = asyncio.Event()
 
 
-def audio_reader(sock: socket.socket, state: CallState, call_id: str):
-    """Runs for the whole life of the call, not just while "listening" --
-    this is what makes barge-in possible: the caller's speech is captured and
-    turn-detected continuously, whether the bot is talking or silent."""
+def handle_audio_frame(frame: bytes, state: CallState):
+    """Runs for every incoming audio frame for the whole life of the call
+    (not just while "listening") -- this is what makes barge-in possible."""
+    if len(frame) != FRAME_BYTES:
+        return
+    is_speech = vad.is_speech(frame, SAMPLE_RATE)
+
+    # A completed turn is already waiting for the main task to drain it
+    # (e.g. it's still busy running STT on the previous turn) -- stop
+    # growing this buffer further, or a slow main task lets it balloon well
+    # past MAX_UTTERANCE_MS.
+    if state.turn_ready.is_set():
+        if is_speech:
+            state.consecutive_speech_frames += 1
+            if state.consecutive_speech_frames >= BARGE_IN_SPEECH_FRAMES:
+                state.barge_in.set()
+        else:
+            state.consecutive_speech_frames = 0
+        return
+
+    if is_speech:
+        state.consecutive_speech_frames += 1
+        state.speech_frames.append(frame)
+        state.silence_run_ms = 0
+        state.started_speaking = True
+        state.utterance_ms += FRAME_MS
+        if state.consecutive_speech_frames >= BARGE_IN_SPEECH_FRAMES:
+            state.barge_in.set()
+    else:
+        state.consecutive_speech_frames = 0
+        if state.started_speaking:
+            # keep a little trailing silence, sounds more natural
+            state.speech_frames.append(frame)
+            state.silence_run_ms += FRAME_MS
+            state.utterance_ms += FRAME_MS
+
+    turn_done = state.started_speaking and (
+        state.silence_run_ms >= SILENCE_MS_TO_END_TURN
+        or state.utterance_ms >= MAX_UTTERANCE_MS
+    )
+    if turn_done:
+        state.turn_ready.set()
+
+
+async def reader_task(ws, state: CallState):
+    """Reads every incoming WebSocket message for the whole life of the
+    call, parses Exotel's protocol events, and feeds audio into VAD/turn
+    detection. Runs concurrently with the main conversation task below."""
     try:
-        while not state.hangup.is_set():
-            msg_type, payload = recv_message(sock)
-            if msg_type is None or msg_type == MSG_TERMINATE:
-                state.hangup.set()
-                state.turn_ready.set()  # wake the main thread so it can exit
-                break
-            if msg_type != MSG_AUDIO or len(payload) != FRAME_BYTES:
+        async for raw_msg in ws:
+            try:
+                msg = json.loads(raw_msg)
+            except (TypeError, ValueError):
+                continue
+            event = msg.get("event")
+
+            if event == "media":
+                payload = msg.get("media", {}).get("payload")
+                if payload:
+                    handle_audio_frame(base64.b64decode(payload), state)
                 continue
 
-            is_speech = vad.is_speech(payload, SAMPLE_RATE)
-            with state.lock:
-                # A completed turn is already waiting for the main thread to
-                # drain it (e.g. it's still busy running STT on the previous
-                # turn) -- stop growing this buffer further, or a slow main
-                # thread lets it balloon well past MAX_UTTERANCE_MS.
-                if state.turn_ready.is_set():
-                    if is_speech:
-                        state.consecutive_speech_frames += 1
-                        if state.consecutive_speech_frames >= BARGE_IN_SPEECH_FRAMES:
-                            state.barge_in.set()
-                    else:
-                        state.consecutive_speech_frames = 0
-                    continue
-
-                if is_speech:
-                    state.consecutive_speech_frames += 1
-                    state.speech_frames.append(payload)
-                    state.silence_run_ms = 0
-                    state.started_speaking = True
-                    state.utterance_ms += FRAME_MS
-                    if state.consecutive_speech_frames >= BARGE_IN_SPEECH_FRAMES:
-                        state.barge_in.set()
-                else:
-                    state.consecutive_speech_frames = 0
-                    if state.started_speaking:
-                        # keep a little trailing silence, sounds more natural
-                        state.speech_frames.append(payload)
-                        state.silence_run_ms += FRAME_MS
-                        state.utterance_ms += FRAME_MS
-
-                turn_done = state.started_speaking and (
-                    state.silence_run_ms >= SILENCE_MS_TO_END_TURN
-                    or state.utterance_ms >= MAX_UTTERANCE_MS
+            if event == "start":
+                start = msg.get("start", {})
+                state.stream_sid = (
+                    start.get("streamSid") or start.get("stream_sid")
+                    or msg.get("streamSid") or msg.get("stream_sid")
                 )
-                if turn_done:
-                    state.turn_ready.set()
-    except (ConnectionResetError, BrokenPipeError, OSError):
+                state.call_id = start.get("callSid") or start.get("call_sid") or "unknown"
+                state.started.set()
+                continue
+
+            if event == "stop":
+                state.hangup.set()
+                state.turn_ready.set()  # wake the main task so it can exit
+                break
+
+            if event in ("connected", "dtmf", "mark"):
+                continue
+
+            # An event this parser doesn't recognize -- log the raw message
+            # rather than silently ignoring it, since Exotel's exact field
+            # names/casing weren't directly testable before a real call.
+            print(f"[unhandled event {event!r}] {raw_msg[:300]}")
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    finally:
         state.hangup.set()
         state.turn_ready.set()
 
 
-def speak(sock: socket.socket, text: str, lock: threading.Lock, state: CallState) -> bool:
+async def send_audio_frame(ws, stream_sid, frame: bytes):
+    if len(frame) < FRAME_BYTES:
+        frame = frame + b"\x00" * (FRAME_BYTES - len(frame))
+    await ws.send(json.dumps({
+        "event": "media",
+        "stream_sid": stream_sid,
+        "media": {"payload": base64.b64encode(frame).decode("ascii")},
+    }))
+
+
+async def send_clear(ws, stream_sid):
+    await ws.send(json.dumps({"event": "clear", "stream_sid": stream_sid}))
+
+
+async def speak(ws, text: str, state: CallState) -> bool:
     """Synthesizes and plays `text`, stopping early if the caller starts
     talking (barge-in). Returns True if the reply was cut short."""
     t0 = time.time()
-    # synthesize_pcm() is a slow network round-trip (Gemini TTS has taken
-    # 6-12+ seconds in real testing) -- Asterisk's AudioSocket app kills the
-    # call after ~2s of the bridge sending nothing back, so without a
-    # keepalive running here too, a slow synthesis call gets the connection
-    # closed out from under it before the first real audio frame is even
-    # sent (this crashed the very first greeting with a BrokenPipeError on a
-    # real test call). The main loop's own keepalive only covers STT/LLM,
-    # not this call, and the initial greeting's speak() call has no
-    # surrounding keepalive at all -- so this needs to be self-contained.
-    keepalive_stop = threading.Event()
-    keepalive_thread = threading.Thread(
-        target=run_keepalive, args=(sock, lock, keepalive_stop), daemon=True
-    )
-    keepalive_thread.start()
-    try:
-        pcm_native, native_rate = pipeline.synthesize_pcm(text)
-    finally:
-        keepalive_stop.set()
-        keepalive_thread.join()
+    pcm_native, native_rate = await asyncio.to_thread(pipeline.synthesize_pcm, text)
     pcm_8k = resample(pcm_native, native_rate, SAMPLE_RATE).astype(np.int16)
     synth_elapsed = time.time() - t0
     print(f"  [TTS {synth_elapsed:.2f}s] \"{text}\"")
@@ -263,101 +261,87 @@ def speak(sock: socket.socket, text: str, lock: threading.Lock, state: CallState
     for frame_idx, i in enumerate(range(0, len(raw), FRAME_BYTES)):
         if frame_idx >= grace_frames and state.barge_in.is_set():
             print("  [TTS] interrupted -- caller started talking")
+            await send_clear(ws, state.stream_sid)
             return True
-        send_audio_frame(sock, raw[i:i + FRAME_BYTES], lock)
-        time.sleep(FRAME_MS / 1000.0)
+        await send_audio_frame(ws, state.stream_sid, raw[i:i + FRAME_BYTES])
+        await asyncio.sleep(FRAME_MS / 1000.0)
     return False
 
 
-class CallHandler(socketserver.BaseRequestHandler):
-    def handle(self):
-        sock = self.request
-        msg_type, payload = recv_message(sock)
-        call_id = str(uuid.UUID(bytes=payload)) if msg_type == MSG_UUID and len(payload) == 16 else "unknown"
-        print(f"[call {call_id}] connected")
+async def run_call(ws):
+    state = CallState()
+    reader = asyncio.create_task(reader_task(ws, state))
 
-        write_lock = threading.Lock()
-        chat_history = []
-        state = CallState()
+    await state.started.wait()
+    call_id = state.call_id
+    print(f"[call {call_id}] connected")
 
-        reader_thread = threading.Thread(target=audio_reader, args=(sock, state, call_id), daemon=True)
-        reader_thread.start()
+    chat_history = []
+    result = None
+    try:
+        await speak(ws, CONSENT_DISCLOSURE, state)
+        while not state.hangup.is_set():
+            await state.turn_ready.wait()
+            if state.hangup.is_set():
+                print(f"[call {call_id}] hangup")
+                break
 
-        try:
-            speak(sock, CONSENT_DISCLOSURE, write_lock, state)
-            while not state.hangup.is_set():
-                state.turn_ready.wait()
-                if state.hangup.is_set():
-                    print(f"[call {call_id}] hangup")
-                    break
+            pcm_8k = np.frombuffer(b"".join(state.speech_frames), dtype="<i2")
+            captured_ms = state.utterance_ms
+            state.speech_frames = []
+            state.silence_run_ms = 0
+            state.started_speaking = False
+            state.utterance_ms = 0
+            state.consecutive_speech_frames = 0
+            state.turn_ready.clear()
 
-                with state.lock:
-                    pcm_8k = np.frombuffer(b"".join(state.speech_frames), dtype="<i2")
-                    captured_ms = state.utterance_ms
-                    state.speech_frames = []
-                    state.silence_run_ms = 0
-                    state.started_speaking = False
-                    state.utterance_ms = 0
-                    state.consecutive_speech_frames = 0
-                    state.turn_ready.clear()
+            # Peak/RMS of the raw captured audio -- printed alongside every
+            # STT result so a run of empty transcriptions can be told apart
+            # from a genuine mic/gain problem versus audio that's actually
+            # there but Whisper still can't use.
+            peak = int(np.abs(pcm_8k).max()) if len(pcm_8k) else 0
+            rms = float(np.sqrt(np.mean(pcm_8k.astype(np.float64) ** 2))) if len(pcm_8k) else 0.0
 
-                keepalive_stop = threading.Event()
-                keepalive_thread = threading.Thread(
-                    target=run_keepalive, args=(sock, write_lock, keepalive_stop), daemon=True
-                )
-                keepalive_thread.start()
-                try:
-                    # Peak/RMS of the raw captured audio -- printed alongside every
-                    # STT result so a run of empty transcriptions can be told apart
-                    # from a genuine mic/gain problem (peak near 0 on int16's
-                    # -32768..32767 range) versus audio that's actually there but
-                    # Whisper still can't use (peak/RMS in a normal range).
-                    peak = int(np.abs(pcm_8k).max()) if len(pcm_8k) else 0
-                    rms = float(np.sqrt(np.mean(pcm_8k.astype(np.float64) ** 2))) if len(pcm_8k) else 0.0
+            if peak < MIN_SPEECH_PEAK:
+                print(f"[call {call_id}] [STT skipped, captured {captured_ms}ms, "
+                      f"peak={peak} rms={rms:.0f}] too quiet to be real speech -- not calling Whisper")
+                continue
 
-                    if peak < MIN_SPEECH_PEAK:
-                        print(f"[call {call_id}] [STT skipped, captured {captured_ms}ms, "
-                              f"peak={peak} rms={rms:.0f}] too quiet to be real speech -- not calling Whisper")
-                        continue
+            t0 = time.time()
+            pcm_16k_f32 = resample(pcm_8k, SAMPLE_RATE, 16000) / 32768.0
+            caller_text = await asyncio.to_thread(pipeline.transcribe_pcm, pcm_16k_f32)
+            stt_elapsed = time.time() - t0
+            if not caller_text:
+                print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms, "
+                      f"peak={peak} rms={rms:.0f}] heard nothing usable -- check mic input / VAD sensitivity")
+                continue
+            print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms, "
+                  f"peak={peak} rms={rms:.0f}] \"{caller_text}\"")
 
-                    t0 = time.time()
-                    pcm_16k_f32 = resample(pcm_8k, SAMPLE_RATE, 16000) / 32768.0
-                    caller_text = pipeline.transcribe_pcm(pcm_16k_f32)
-                    stt_elapsed = time.time() - t0
-                    if not caller_text:
-                        print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms, "
-                              f"peak={peak} rms={rms:.0f}] heard nothing usable -- check mic input / VAD sensitivity")
-                        continue
-                    print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms, "
-                          f"peak={peak} rms={rms:.0f}] \"{caller_text}\"")
+            result = await asyncio.to_thread(pipeline.generate_response, caller_text, chat_history)
+            print(f"[call {call_id}] [LLM {result['elapsed']:.2f}s] "
+                  f"({'SUPPRESSED' if result['suppressed'] else 'reply'}) \"{result['reply']}\"")
+            chat_history.append({"role": "user", "content": caller_text})
+            chat_history.append({"role": "assistant", "content": result["reply"]})
 
-                    result = pipeline.generate_response(caller_text, chat_history=chat_history)
-                    print(f"[call {call_id}] [LLM {result['elapsed']:.2f}s] "
-                          f"({'SUPPRESSED' if result['suppressed'] else 'reply'}) \"{result['reply']}\"")
-                    chat_history.append({"role": "user", "content": caller_text})
-                    chat_history.append({"role": "assistant", "content": result["reply"]})
-                finally:
-                    keepalive_stop.set()
-                    keepalive_thread.join()
-
-                speak(sock, result["reply"], write_lock, state)
-                if result["suppressed"]:
-                    time.sleep(0.5)
-                    break
-        except (ConnectionResetError, BrokenPipeError):
-            print(f"[call {call_id}] connection dropped")
-        finally:
-            state.hangup.set()
-            print(f"[call {call_id}] closed")
-
-
-class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    allow_reuse_address = True
-    daemon_threads = True
+            await speak(ws, result["reply"], state)
+            if result["suppressed"]:
+                await asyncio.sleep(0.5)
+                break
+    except websockets.exceptions.ConnectionClosed:
+        print(f"[call {call_id}] connection dropped")
+    finally:
+        state.hangup.set()
+        reader.cancel()
+        print(f"[call {call_id}] closed")
 
 
 if __name__ == "__main__":
-    print(f"AudioSocket bridge listening on {HOST}:{PORT}")
-    print("Point your Asterisk dialplan's AudioSocket() app at this host:port.")
-    server = ThreadingTCPServer((HOST, PORT), CallHandler)
-    server.serve_forever()
+    async def main():
+        print(f"Exotel AgentStream bridge listening on {HOST}:{PORT}")
+        print("Point an Exotel Voicebot Applet at wss://<public-host>/?sample-rate=8000")
+        print("(use `ngrok http 8090` or similar to expose this locally for testing).")
+        async with websockets.serve(run_call, HOST, PORT):
+            await asyncio.Future()  # run forever
+
+    asyncio.run(main())

@@ -1,10 +1,14 @@
-# Phase-2 telephony bridge -- runs on your own machine/VM alongside Asterisk,
-# not in Colab.
+# Phase-2 telephony bridge -- runs on your own machine/VM, reachable over the
+# public internet (a real deployment, or `ngrok http 8090` for local testing)
+# so Exotel's cloud platform can connect to it. Not in Colab.
 sentence-transformers==6.0.1
 chromadb==1.5.9
 numpy==2.4.6
 scipy
 webrtcvad-wheels==2.0.14  # prebuilt wheels for webrtcvad (import name is still "webrtcvad") -- avoids needing a C compiler
+websockets>=12.0  # the bridge server itself -- Exotel's AgentStream connects over a plain
+                  # WebSocket (see bridge_service.py), replacing the old Asterisk AudioSocket
+                  # TCP protocol. >=12.0 for the modern single-argument handler signature.
 openai>=1.0.0     # used as an OpenAI-compatible client pointed at OpenRouter (not OpenAI itself) --
                   # reaches Claude Haiku 4.5 via OpenRouter; needs OPENROUTER_API_KEY set (see README)
 requests          # raw HTTP calls to OpenRouter's audio transcription endpoint
