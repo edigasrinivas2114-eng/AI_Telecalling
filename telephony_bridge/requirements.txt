@@ -13,9 +13,10 @@ openai>=1.0.0     # used as an OpenAI-compatible client pointed at OpenRouter (n
                   # reaches Claude Haiku 4.5 via OpenRouter; needs OPENROUTER_API_KEY set (see README)
 requests          # raw HTTP calls to OpenRouter's audio transcription endpoint
                   # (openai/whisper-large-v3-turbo) and speech endpoint
-                  # (deepgram/aura-2) -- neither request shape matches the openai
-                  # package's own audio helpers, so these call OpenRouter directly
-                  # instead. faster-whisper removed -- STT and TTS both run hosted
-                  # on OpenRouter now (see pipeline.py for why). The speech endpoint
-                  # returns raw PCM directly (no audio container), so no decoding
-                  # library (pydub/ffmpeg) is needed for it.
+                  # (google/gemini-3.1-flash-tts-preview) -- neither request shape
+                  # matches the openai package's own audio helpers, so these call
+                  # OpenRouter directly instead. faster-whisper removed -- STT and
+                  # TTS both run hosted on OpenRouter now (see pipeline.py for why).
+                  # The speech endpoint returns raw PCM directly (no audio
+                  # container) when response_format="pcm" is requested, so no
+                  # decoding library (pydub/ffmpeg) is needed for it.
