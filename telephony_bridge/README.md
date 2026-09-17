@@ -24,22 +24,20 @@ still through the same OpenRouter account rather than a separate Anthropic one.)
 See setup step 3 below.
 
 Why TTS is different here than in the notebook: Piper's voices sound
-noticeably synthetic. This first moved to **edge-tts** (free access to
-Microsoft's neural voices via Microsoft Edge's "Read aloud" service, no API
-key needed), but Telugu specifically still sounded noticeably synthetic even
-with Microsoft's voices -- a real limitation, not a config issue, that briefly
-led to running the whole pipeline in English instead (better TTS quality,
-worse fit for actual Telugu-speaking leads). TTS then moved to Google's
-Gemini 3.1 Flash TTS Preview via OpenRouter on the theory that its broad
-claimed language coverage would help, but that support was never confirmed
-for Telugu specifically. TTS has since moved again, to **Sarvam AI's Bulbul
-v3** (`bulbul:v3`) -- a model trained specifically on Indian languages,
-Telugu included, rather than a general-purpose multilingual model. This is a
-separate paid account/API key from OpenRouter (OpenRouter doesn't host a
-Telugu-specialized TTS model), reached through Sarvam's own `sarvamai`
-Python SDK. Still worth listening to critically rather than assuming it's
-fixed, but it's a stronger bet than a general model's broad language list.
-See setup step 3 below for getting a Sarvam API key.
+noticeably synthetic. Several Telugu-capable options were tried after that --
+**edge-tts** (Microsoft's neural voices, still sounded synthetic for Telugu
+specifically), **Google's Gemini 3.1 Flash TTS Preview via OpenRouter**
+(broad claimed language coverage, but Telugu support was never confirmed),
+and **Sarvam AI's Bulbul v3** (trained specifically on Indian languages, but
+needs a separate paid account outside OpenRouter). TTS now runs on
+**Deepgram Aura-2 via OpenRouter** (`deepgram/aura-2`) instead -- clearer,
+faster (purpose-built for low-latency conversational voice agents, unlike
+Gemini's 6-12+ second replies), but **English-only**, so the whole script
+(system prompt, consent disclosure, opt-out reply in `programme_config.py`)
+now runs in English too, a deliberate trade-off away from this project's
+actual Telugu-speaking audience made explicitly for voice quality/speed. If
+Telugu comes back as a requirement, both `pipeline.py`'s TTS and
+`programme_config.py` need to change together again.
 
 ## What's in this folder
 
@@ -47,7 +45,7 @@ See setup step 3 below for getting a Sarvam API key.
   STT/RAG/LLM/TTS pipeline.
 - `pipeline.py` -- STT (Whisper Large V3 Turbo, hosted via OpenRouter), RAG
   (Chroma + sentence-transformers), LLM (Claude Haiku 4.5 via OpenRouter),
-  TTS (Sarvam AI's Bulbul v3).
+  TTS (Deepgram Aura-2, hosted via OpenRouter).
 - `programme_config.py` -- the same editable programme pitch variables as the
   notebook. Edit the values here too.
 - `asterisk_config/pjsip_snippet.conf` -- two test SIP extensions (1000, 1001).
@@ -102,26 +100,10 @@ no code change needed if you rotate the key later, just update the env var and
 restart the bridge. This is billed against your OpenRouter credit balance --
 `pipeline.py`'s `OPENROUTER_MODEL` (`anthropic/claude-haiku-4.5`) is a paid
 model, so calls cost something per use, same as calling Claude directly would.
+TTS (`deepgram/aura-2`) is billed against this same OpenRouter account and key
+-- no separate signup needed for it.
 
-### 4. Get a Sarvam AI API key and add credit
-
-TTS runs on Sarvam AI, a separate account/API key from OpenRouter (OpenRouter
-doesn't host a Telugu-specialized TTS model).
-
-1. Go to https://www.sarvam.ai/ and sign in (or create an account).
-2. Create an API key/subscription key from your Sarvam dashboard. Same rule
-   as the OpenRouter key: copy it immediately, it's typically shown once.
-3. Add a small balance to cover testing.
-4. **Never paste this key into a chat with me or commit it to git**:
-```bash
-echo 'export SARVAM_API_KEY="your-key-here"' >> ~/.bashrc
-source ~/.bashrc
-```
-The `sarvamai` Python package (installed in the next step) reads this via
-`pipeline.py` -- no code change needed if you rotate the key later, just
-update the env var and restart the bridge.
-
-### 5. Install Python dependencies for the bridge
+### 4. Install Python dependencies for the bridge
 
 ```bash
 cd telephony_bridge
@@ -135,25 +117,26 @@ pip install -r requirements.txt
 ```
 
 No voice file to download this time -- the TTS request goes out live over the network on
-each call, using the speaker name set in `pipeline.py` (`SARVAM_TTS_SPEAKER`, currently
-`"anand"`, one of bulbul:v3's ~39 speaker names -- speaker names aren't interchangeable
-across Sarvam's bulbul model versions, so a name valid for v2 won't work for v3 and vice
-versa). There's no local CLI to preview a voice before committing to it -- the only way to
-check one is a real test call.
+each call, using the voice name set in `pipeline.py` (`OPENROUTER_TTS_VOICE`, currently
+`"aura-2-arcas-en"`, one of Aura-2's ~40 voice names -- English-only, no other language
+available for this model). There's no local CLI to preview a voice before committing to
+it -- `test_deepgram_tts_direct.py` in this folder is a quick standalone script for that:
+edit the `text`/`voice` in it and run `python3 test_deepgram_tts_direct.py` to save an mp3
+you can listen to without needing a full test call.
 
-### 6. Edit the programme details
+### 5. Edit the programme details
 
 Open `programme_config.py` and fill in the real `PROGRAMME_*` / `CERTIFICATION_NAME`
 / `COMPANY_NAME` values (same as you did in the notebook).
 
-### 7. Start the bridge service
+### 6. Start the bridge service
 
 ```bash
 python3 bridge_service.py
 ```
 You should see: `AudioSocket bridge listening on 0.0.0.0:8090`
 
-### 8. Install two softphones and test
+### 7. Install two softphones and test
 
 Install [Zoiper](https://www.zoiper.com/) or [Linphone](https://www.linphone.org/)
 (free) on your phone or laptop -- twice, or on two different devices.
@@ -174,12 +157,11 @@ running `bridge_service.py` for STT/LLM timing and transcripts.
   funded `OPENROUTER_API_KEY` -- STT moved off this machine's CPU specifically
   because local transcription kept hitting unpredictable multi-second-to-a-minute
   stalls; hosted Whisper trades a small per-call cost for reliability and speed.
-- TTS also costs real money now and needs live internet access (Sarvam AI's
-  Bulbul v3, a separate funded `SARVAM_API_KEY` from OpenRouter's LLM/STT) --
-  unlike Piper, it won't work offline. It's trained specifically on Indian
-  languages, a stronger bet than the general-purpose models tried before it,
-  but still listen critically on a real test call rather than assuming it's
-  right.
+- TTS also costs real money now and needs live internet access (Deepgram
+  Aura-2 via OpenRouter, same funded `OPENROUTER_API_KEY` as the LLM/STT) --
+  unlike Piper, it won't work offline. It's English-only, which is why this
+  whole script currently runs in English rather than Telugu -- see the TTS
+  note near the top of this file.
 - Barge-in exists (the caller talking over the bot cuts its reply short) but
   is tuned with a fixed threshold (`BARGE_IN_SPEECH_FRAMES` in
   `bridge_service.py`) -- a brief cough or background noise could still

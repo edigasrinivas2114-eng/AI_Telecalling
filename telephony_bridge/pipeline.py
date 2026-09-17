@@ -23,25 +23,22 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   provider). This paid model avoids the shared free-tier pool entirely.
   Needs an OPENROUTER_API_KEY env var with a funded OpenRouter credit balance
   (see README).
-- TTS: Sarvam AI's Bulbul v3 (`bulbul:v3`), a text-to-speech model built and
-  trained specifically for Indian languages (11 of them, Telugu included),
-  reached through Sarvam's own API/SDK -- a separate paid account from
-  OpenRouter, since OpenRouter doesn't host any Telugu-specialized TTS model.
-  This replaced Google's Gemini 3.1 Flash TTS Preview (via OpenRouter), which
-  was a general-purpose multilingual model with unconfirmed Telugu quality --
-  Sarvam's whole product focus is Indian-language speech, a stronger bet for
-  this project's actual audience than a general model's broad language list.
-  Uses the official `sarvamai` Python SDK rather than raw HTTP calls, both
-  because Sarvam's own request/response field names have changed recently
-  (e.g. `target_language_code` -> `language_code`) and because the SDK
-  absorbs changes like that instead of this code needing to track them.
-  Requests audio at 8kHz directly (`speech_sample_rate=8000`) -- the same
-  rate AudioSocket needs -- since Sarvam is designed for telephony use and
-  should sound better tuned for 8kHz than a naive downsample from a higher
-  native rate would. The response is a genuine WAV container (unlike the
-  OpenRouter/Gemini endpoint this replaced, which claimed mp3 but actually
-  returned raw headerless PCM), so it's parsed with the stdlib `wave` module.
-  Needs a SARVAM_API_KEY env var (see README).
+- TTS: Deepgram Aura-2, hosted via OpenRouter (`deepgram/aura-2`). This is an
+  English-only model -- it has no Telugu (or any non-English) voice at all --
+  so using it meant switching the whole script (system prompt, consent
+  disclosure, opt-out reply in programme_config.py) to English, a deliberate
+  trade-off away from this project's actual Telugu-speaking audience, made
+  explicitly for better voice quality and much lower latency than the
+  Telugu-capable options tried before it (Gemini TTS routinely took
+  6-12+ seconds per reply; Deepgram is purpose-built for low-latency
+  conversational voice agents). If Telugu comes back as a requirement later,
+  this is the piece that needs to change again, alongside programme_config.py.
+  Requests `response_format: "pcm"` explicitly -- OpenRouter's /audio/speech
+  endpoint defaults to raw PCM already (the opposite of OpenAI's own API,
+  which defaults to mp3), but asking for it outright avoids relying on an
+  undocumented default. Same content-type-parsing approach already proven
+  correct for the Gemini TTS integration this replaced (rate/channels read
+  from `Content-Type: audio/pcm;rate=<N>;channels=<N>`).
 """
 
 import base64
@@ -56,7 +53,6 @@ import chromadb
 import numpy as np
 import openai
 import requests
-from sarvamai import SarvamAI
 from sentence_transformers import SentenceTransformer
 
 from programme_config import (
@@ -82,16 +78,14 @@ OPENROUTER_STT_MODEL = "openai/whisper-large-v3-turbo"
 OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 STT_TIMEOUT_S = 15  # generous for a network call; hosted Whisper itself is very fast
 
-# Sarvam AI's Bulbul TTS -- see module docstring. A separate paid account
-# from OpenRouter; reads its own key from SARVAM_API_KEY (see README).
-# "anand" is one of bulbul:v3's ~39 speaker names, confirmed valid for this
-# model version (speaker names aren't interchangeable across bulbul
-# versions) -- picked as a male voice to fit the "Srinivas" persona, swap to
-# another name from Sarvam's voice list if it doesn't suit.
-SARVAM_TTS_MODEL = "bulbul:v3"
-SARVAM_TTS_SPEAKER = "anand"
-SARVAM_TTS_LANGUAGE_CODE = "te-IN"
-sarvam_client = SarvamAI(api_subscription_key=os.environ["SARVAM_API_KEY"])
+# Deepgram Aura-2 via OpenRouter -- see module docstring. English-only.
+# "aura-2-arcas-en" is one of Aura-2's ~40 voice names (professional male,
+# to fit the "Srinivas" persona) -- confirmed valid via direct testing (see
+# test_deepgram_tts_direct.py). Same OPENROUTER_API_KEY as the LLM/STT.
+OPENROUTER_TTS_MODEL = "deepgram/aura-2"
+OPENROUTER_TTS_VOICE = "aura-2-arcas-en"
+OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
+TTS_TIMEOUT_S = 15
 
 print("Loading embedder + knowledge base...")
 # Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
@@ -209,9 +203,8 @@ def generate_response(user_text: str, chat_history=None) -> dict:
         "content": f"RETRIEVED CONTEXT:\n{context_text}\n\nCALLER SAID: {user_text}",
     })
 
-    # Telugu: "One moment, let me try that again." -- spoken fallback on API
-    # failure only, never sent anywhere as text.
-    fallback_reply = "ఒక్క నిమిషం, మళ్ళీ ప్రయత్నిస్తాను."
+    # Spoken fallback on API failure only, never sent anywhere as text.
+    fallback_reply = "One moment, let me try that again."
 
     try:
         # OpenAI-style chat payload: system prompt goes inside `messages` as
@@ -239,20 +232,30 @@ def generate_response(user_text: str, chat_history=None) -> dict:
 def synthesize_pcm(text: str):
     """Returns (mono int16 PCM samples, sample_rate) -- callers must resample
     to whatever they actually need."""
-    response = sarvam_client.text_to_speech.convert(
-        text=text,
-        language_code=SARVAM_TTS_LANGUAGE_CODE,
-        model=SARVAM_TTS_MODEL,
-        speaker=SARVAM_TTS_SPEAKER,
-        speech_sample_rate=8000,  # matches AudioSocket's native rate -- no resampling needed
+    response = requests.post(
+        url=OPENROUTER_TTS_URL,
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": OPENROUTER_TTS_MODEL,
+            "input": text,
+            "voice": OPENROUTER_TTS_VOICE,
+            "response_format": "pcm",
+        },
+        timeout=TTS_TIMEOUT_S,
     )
-    audio_bytes = base64.b64decode(response.audios[0])
-    with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
-        sample_rate = wf.getframerate()
-        channels = wf.getnchannels()
-        pcm_bytes = wf.readframes(wf.getnframes())
+    response.raise_for_status()
 
-    samples = np.frombuffer(pcm_bytes, dtype="<i2")
+    # Raw headerless PCM -- Content-Type looks like "audio/pcm;rate=24000;channels=1".
+    content_type = response.headers.get("content-type", "")
+    rate_match = re.search(r"rate=(\d+)", content_type)
+    channels_match = re.search(r"channels=(\d+)", content_type)
+    sample_rate = int(rate_match.group(1)) if rate_match else 24000
+    channels = int(channels_match.group(1)) if channels_match else 1
+
+    samples = np.frombuffer(response.content, dtype="<i2")
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
     return samples, sample_rate

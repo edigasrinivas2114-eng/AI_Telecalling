@@ -15,22 +15,16 @@ The script's opening also assumes a known lead name from a dialer/CRM ("am I
 speaking with [Lead Name]?"), which this test system doesn't have yet -- the
 AI asks for the caller's name instead.
 
-LANGUAGE NOTE: back to Telugu per explicit request, after a period running
-English-only. Telugu TTS quality was a real limitation first with edge-tts
-(Microsoft's voices), then with Google's Gemini 3.1 Flash TTS (Telugu support
-there was never confirmed against Google's own docs); pipeline.py now uses
-Sarvam AI's Bulbul TTS instead, a model trained specifically on Indian
-languages including Telugu -- a stronger bet on paper, but still worth
-listening to critically rather than assuming it's fixed.
-CONSENT_DISCLOSURE
-and OPT_OUT_REPLY below are translated into Telugu (I'm not a certified
-Telugu speaker/translator -- please have a native speaker check these two
-lines before relying on them for real calls; they are the only lines spoken
-verbatim, so accuracy there matters most). The rest of this file (system
-prompt, knowledge base) stays in English on purpose: the LLM is instructed to
-respond in Telugu regardless of the instruction language, and keeping facts
-in one authoritative English form makes them easier for you to verify and
-edit than a second translated copy would be.
+LANGUAGE NOTE: back to English (again) per explicit request, after multiple
+rounds trying to get Telugu TTS quality/reliability right -- edge-tts's
+Microsoft voices sounded synthetic for Telugu, Google's Gemini 3.1 Flash TTS
+had unconfirmed Telugu support, and Sarvam AI's Bulbul TTS (trained
+specifically on Indian languages) would have needed a separate paid account.
+pipeline.py now uses Deepgram Aura-2 via OpenRouter, which sounds clear and
+fast but is English-only -- there is no Telugu voice for it at all, so
+CONSENT_DISCLOSURE and OPT_OUT_REPLY below are English again, and
+SYSTEM_PROMPT_TEMPLATE instructs English replies. If Telugu comes back as a
+requirement, this file and pipeline.py's TTS both need to change together.
 """
 
 COMPANY_NAME = "Raga Tech Source"
@@ -61,15 +55,12 @@ TRACKS = [
 # is a compliance decision, not just a script preference): the "AI assistant"
 # framing is deliberately removed here. The recording notice is kept -- that
 # disclosure is near-universally expected/required regardless of human vs AI.
-# Telugu: "Hello! I am Srinivas, calling from Raga Tech Source. This call is
-# being recorded. Could you please tell me your name?" -- verify wording.
 CONSENT_DISCLOSURE = (
-    f"నమస్కారం! నేను {AGENT_DISPLAY_NAME}, {COMPANY_NAME} నుండి మాట్లాడుతున్నాను. "
-    "ఈ కాల్ రికార్డ్ చేయబడుతోంది. మీ పేరు చెప్పగలరా?"
+    f"Hello! I'm {AGENT_DISPLAY_NAME}, calling from {COMPANY_NAME}. "
+    "This call is being recorded. Could you tell me your name?"
 )
 
-# Telugu: "Understood, we will not call you again. Thank you!" -- verify wording.
-OPT_OUT_REPLY = "అర్థమైంది, ఇకపై మీకు కాల్ చేయము. ధన్యవాదాలు!"
+OPT_OUT_REPLY = "Understood, we won't call you again. Thank you!"
 
 SYSTEM_PROMPT_TEMPLATE = f"""You are {AGENT_DISPLAY_NAME}, an AI voice agent for {COMPANY_NAME}, an outbound \
 caller reaching leads who have shown interest in a training programme. Follow this call flow, \
@@ -106,11 +97,9 @@ shortly to help them enroll in that track, thank them for their time, and end wa
 
 Keep responses SHORT (1-2 sentences) -- this is a live phone call, not a written chat.
 
-IMPORTANT: Respond ONLY in Telugu (తెలుగు) for every reply, even though these instructions are \
-in English. It's natural to keep company/track/product names (like {COMPANY_NAME} or "Full Stack \
-+ AI") in English within an otherwise-Telugu sentence, the way people actually speak. Never use \
-markdown formatting (asterisks, bullet points, headers, etc.) -- this reply is spoken aloud by a \
-text-to-speech voice, not displayed as text, so write it as plain spoken sentences.
+Keep responses in English. Never use markdown formatting (asterisks, bullet points, headers, \
+etc.) -- this reply is spoken aloud by a text-to-speech voice, not displayed as text, so write \
+it as plain spoken sentences.
 """
 
 KNOWLEDGE_BASE = [
