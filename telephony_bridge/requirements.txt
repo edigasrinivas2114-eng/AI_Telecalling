@@ -12,9 +12,6 @@ requests          # raw HTTP calls to OpenRouter's audio transcription endpoint
                   # (google/gemini-3.1-flash-tts-preview) -- neither request shape matches
                   # the openai package's own audio helpers, so these call OpenRouter
                   # directly instead. faster-whisper and edge-tts both removed -- STT and
-                  # TTS now both run hosted on OpenRouter (see pipeline.py for why).
-pydub==0.25.1    # decodes the TTS endpoint's mp3 output to raw PCM -- needs ffmpeg installed (see README)
-audioop-lts      # pydub's set_channels() needs the stdlib "audioop" module, removed in Python 3.13+;
-                 # this restores it. No prebuilt wheel for plain (non free-threaded) Python 3.14 yet,
-                 # so pip will compile it from source -- needs build-essential + python3.14-dev,
-                 # which you should already have installed from an earlier step in this project.
+                  # TTS now both run hosted on OpenRouter (see pipeline.py for why). The
+                  # speech endpoint returns raw PCM directly (no audio container), so no
+                  # decoding library (pydub/ffmpeg) is needed for it.

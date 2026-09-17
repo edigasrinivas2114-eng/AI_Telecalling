@@ -32,8 +32,13 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   against Google's own documentation before switching (network access to
   verify was blocked) -- if output sounds wrong/non-Telugu, that's the first
   thing to check. POSTs directly to OpenRouter's speech endpoint
-  (`/audio/speech`, JSON body with `model`/`input`/`voice`, raw audio bytes
-  back) -- same endpoint shape OpenRouter uses for every TTS model it hosts.
+  (`/audio/speech`, JSON body with `model`/`input`/`voice`). The response is
+  raw headerless PCM audio (`Content-Type: audio/pcm;rate=<N>;channels=<N>`),
+  NOT an mp3 container despite the sample code's `output.mp3` filename --
+  confirmed via direct testing (see `test_tts_direct.py`) after an earlier
+  version of this code force-decoded the response as mp3 and produced
+  garbage/silent audio on real calls. The actual rate/channel count is parsed
+  from the response's content-type header rather than assumed fixed.
 """
 
 import base64
@@ -48,7 +53,6 @@ import chromadb
 import numpy as np
 import openai
 import requests
-from pydub import AudioSegment
 from sentence_transformers import SentenceTransformer
 
 from programme_config import (
@@ -246,6 +250,17 @@ def synthesize_pcm(text: str):
         timeout=TTS_TIMEOUT_S,
     )
     response.raise_for_status()
-    audio = AudioSegment.from_file(io.BytesIO(response.content), format="mp3").set_channels(1)
-    samples = np.array(audio.get_array_of_samples(), dtype=np.int16)
-    return samples, audio.frame_rate
+
+    # Raw headerless PCM, not an audio container -- see module docstring.
+    # Content-Type looks like "audio/pcm;rate=24000;channels=1"; parse the
+    # actual values instead of assuming them, in case they ever change.
+    content_type = response.headers.get("content-type", "")
+    rate_match = re.search(r"rate=(\d+)", content_type)
+    channels_match = re.search(r"channels=(\d+)", content_type)
+    sample_rate = int(rate_match.group(1)) if rate_match else 24000
+    channels = int(channels_match.group(1)) if channels_match else 1
+
+    samples = np.frombuffer(response.content, dtype="<i2")
+    if channels > 1:
+        samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
+    return samples, sample_rate

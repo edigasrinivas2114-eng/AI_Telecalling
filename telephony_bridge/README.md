@@ -98,13 +98,7 @@ restart the bridge. This is billed against your OpenRouter credit balance --
 `pipeline.py`'s `OPENROUTER_MODEL` (`anthropic/claude-haiku-4.5`) is a paid
 model, so calls cost something per use, same as calling Claude directly would.
 
-### 4. Install ffmpeg (needed to decode the TTS endpoint's mp3 output)
-
-```bash
-sudo apt-get install -y ffmpeg
-```
-
-### 5. Install Python dependencies for the bridge
+### 4. Install Python dependencies for the bridge
 
 ```bash
 cd telephony_bridge
@@ -125,19 +119,19 @@ whatever language the input text is in). There's no local CLI to preview a voice
 committing to it the way `edge-tts --list-voices` allowed -- the only way to check one is
 a real test call.
 
-### 6. Edit the programme details
+### 5. Edit the programme details
 
 Open `programme_config.py` and fill in the real `PROGRAMME_*` / `CERTIFICATION_NAME`
 / `COMPANY_NAME` values (same as you did in the notebook).
 
-### 7. Start the bridge service
+### 6. Start the bridge service
 
 ```bash
 python3 bridge_service.py
 ```
 You should see: `AudioSocket bridge listening on 0.0.0.0:8090`
 
-### 8. Install two softphones and test
+### 7. Install two softphones and test
 
 Install [Zoiper](https://www.zoiper.com/) or [Linphone](https://www.linphone.org/)
 (free) on your phone or laptop -- twice, or on two different devices.
