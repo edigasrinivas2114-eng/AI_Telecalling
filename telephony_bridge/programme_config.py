@@ -16,10 +16,12 @@ speaking with [Lead Name]?"), which this test system doesn't have yet -- the
 AI asks for the caller's name instead.
 
 LANGUAGE NOTE: back to Telugu per explicit request, after a period running
-English-only. Telugu TTS quality (even Microsoft's production neural voices)
-still sounds more synthetic than English neural voices -- a real, current
-limitation across every TTS provider, not something more config can fix --
-but real Telugu-speaking leads matter more than that gap. CONSENT_DISCLOSURE
+English-only. Telugu TTS quality was a real limitation with edge-tts
+(Microsoft's voices) specifically; pipeline.py has since switched TTS to
+Google's Gemini 3.1 Flash TTS via OpenRouter to try to improve on that --
+Telugu support there wasn't confirmed against Google's docs before
+switching, so treat voice quality/correctness as still worth checking.
+CONSENT_DISCLOSURE
 and OPT_OUT_REPLY below are translated into Telugu (I'm not a certified
 Telugu speaker/translator -- please have a native speaker check these two
 lines before relying on them for real calls; they are the only lines spoken

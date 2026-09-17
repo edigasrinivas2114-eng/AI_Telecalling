@@ -24,15 +24,17 @@ still through the same OpenRouter account rather than a separate Anthropic one.)
 See setup step 3 below.
 
 Why TTS is different here than in the notebook: Piper's voices sound
-noticeably synthetic. This uses **edge-tts** instead -- free access to
-Microsoft's production neural voices (the same ones Azure sells), reached via
-Microsoft Edge's "Read aloud" service, no API key or Azure account needed.
-Trade-off: each reply needs live internet access (Piper runs fully offline).
-This project also tried Telugu end-to-end (STT, TTS, and LLM replies) for a
-while, but even Microsoft's best Telugu neural voices still sounded
-noticeably synthetic -- a real, current limitation of Telugu TTS quality
-across every provider, not a config issue. It now runs in English, where
-neural TTS quality is considerably more natural.
+noticeably synthetic. This first moved to **edge-tts** (free access to
+Microsoft's neural voices via Microsoft Edge's "Read aloud" service, no API
+key needed), but Telugu specifically still sounded noticeably synthetic even
+with Microsoft's voices -- a real limitation, not a config issue, that briefly
+led to running the whole pipeline in English instead (better TTS quality,
+worse fit for actual Telugu-speaking leads). TTS has since moved again, to
+**Google's Gemini 3.1 Flash TTS Preview via OpenRouter** (paid, same account
+as the LLM/STT), on the theory that its much broader claimed language
+coverage (70+ languages vs. edge-tts's narrower set) gives Telugu a better
+shot -- this wasn't confirmed against Google's own docs before switching, so
+treat it as worth listening to critically rather than assumed-fixed.
 
 ## What's in this folder
 
@@ -40,7 +42,7 @@ neural TTS quality is considerably more natural.
   STT/RAG/LLM/TTS pipeline.
 - `pipeline.py` -- STT (Whisper Large V3 Turbo, hosted via OpenRouter), RAG
   (Chroma + sentence-transformers), LLM (Claude Haiku 4.5 via OpenRouter),
-  TTS (edge-tts / Microsoft neural voices).
+  TTS (Google Gemini 3.1 Flash TTS Preview, hosted via OpenRouter).
 - `programme_config.py` -- the same editable programme pitch variables as the
   notebook. Edit the values here too.
 - `asterisk_config/pjsip_snippet.conf` -- two test SIP extensions (1000, 1001).
@@ -96,7 +98,7 @@ restart the bridge. This is billed against your OpenRouter credit balance --
 `pipeline.py`'s `OPENROUTER_MODEL` (`anthropic/claude-haiku-4.5`) is a paid
 model, so calls cost something per use, same as calling Claude directly would.
 
-### 4. Install ffmpeg (needed to decode edge-tts's audio)
+### 4. Install ffmpeg (needed to decode the TTS endpoint's mp3 output)
 
 ```bash
 sudo apt-get install -y ffmpeg
@@ -115,13 +117,13 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 ```
 
-No voice file to download this time -- edge-tts fetches the voice live over the network on
-each call, using the voice name set in `pipeline.py` (`EDGE_TTS_VOICE`, currently
-`te-IN-MohanNeural`; swap to `te-IN-ShrutiNeural` for a female voice, or any other
-[Edge TTS voice name](https://github.com/rany2/edge-tts) for a different language). Run
-`edge-tts --list-voices` (after installing the deps below) to browse all available voices,
-and `edge-tts --voice <name> --text "..." --write-media sample.mp3` to preview one before
-committing to it.
+No voice file to download this time -- the TTS request goes out live over the network on
+each call, using the voice name set in `pipeline.py` (`OPENROUTER_TTS_VOICE`, currently
+`"Zephyr"`, one of Gemini's ~30 language-agnostic character voices -- there's no
+locale-specific name like edge-tts's `te-IN-*` voices; Gemini is expected to speak
+whatever language the input text is in). There's no local CLI to preview a voice before
+committing to it the way `edge-tts --list-voices` allowed -- the only way to check one is
+a real test call.
 
 ### 6. Edit the programme details
 
@@ -156,10 +158,11 @@ running `bridge_service.py` for STT/LLM timing and transcripts.
   funded `OPENROUTER_API_KEY` -- STT moved off this machine's CPU specifically
   because local transcription kept hitting unpredictable multi-second-to-a-minute
   stalls; hosted Whisper trades a small per-call cost for reliability and speed.
-- TTS needs live internet access (edge-tts calls out to Microsoft's service per
-  reply) -- unlike Piper, it won't work fully offline. It's also an unofficial
-  (if long-stable, widely used) way of reaching that service, not a supported
-  public API -- worth knowing if this ever needs a guaranteed SLA.
+- TTS also costs real money now and needs live internet access (Gemini 3.1 Flash
+  TTS Preview via OpenRouter, same funded `OPENROUTER_API_KEY` as the LLM/STT) --
+  unlike Piper, it won't work offline. Telugu output quality/correctness for this
+  specific model was not confirmed before switching to it -- listen critically on
+  a real test call rather than assuming it's right.
 - Barge-in exists (the caller talking over the bot cuts its reply short) but
   is tuned with a fixed threshold (`BARGE_IN_SPEECH_FRAMES` in
   `bridge_service.py`) -- a brief cough or background noise could still

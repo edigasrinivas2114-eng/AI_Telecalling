@@ -23,19 +23,19 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   provider). This paid model avoids the shared free-tier pool entirely.
   Needs an OPENROUTER_API_KEY env var with a funded OpenRouter credit balance
   (see README).
-- TTS: edge-tts (free access to Microsoft's neural voices -- no API key, no
-  Azure account, no cost -- instead of Piper). Piper's Telugu voices are
-  robotic-sounding; these are the same production-quality neural voices Azure
-  sells, reached through Microsoft Edge's "Read aloud" service. This is an
-  unofficial (if long-stable and widely used) way of reaching that service,
-  and each call needs live internet access, unlike Piper's fully offline
-  synthesis. Switched back to Telugu per explicit request, after an earlier
-  English-only period -- Telugu neural voices (even Microsoft's) still sound
-  more synthetic than English ones, a real limitation across every TTS
-  provider, but real Telugu-speaking leads matter more than that gap.
+- TTS: Google Gemini 3.1 Flash TTS Preview, hosted via OpenRouter
+  (`google/gemini-3.1-flash-tts-preview`), replacing edge-tts. This is a paid
+  model (billed against the same OpenRouter account as the LLM/STT above) --
+  chosen for its claimed 70+ language coverage, the broadest of any TTS model
+  found on OpenRouter, on the theory that this gives the best shot at
+  natural-sounding Telugu. Telugu support specifically was NOT confirmed
+  against Google's own documentation before switching (network access to
+  verify was blocked) -- if output sounds wrong/non-Telugu, that's the first
+  thing to check. POSTs directly to OpenRouter's speech endpoint
+  (`/audio/speech`, JSON body with `model`/`input`/`voice`, raw audio bytes
+  back) -- same endpoint shape OpenRouter uses for every TTS model it hosts.
 """
 
-import asyncio
 import base64
 import io
 import json
@@ -45,7 +45,6 @@ import time
 import wave
 
 import chromadb
-import edge_tts
 import numpy as np
 import openai
 import requests
@@ -75,13 +74,17 @@ OPENROUTER_STT_MODEL = "openai/whisper-large-v3-turbo"
 OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 STT_TIMEOUT_S = 15  # generous for a network call; hosted Whisper itself is very fast
 
-# Back to Telugu per explicit request -- te-IN-MohanNeural (male) pairs with
-# the "Srinivas" persona; te-IN-ShrutiNeural is the female alternative. Both
-# confirmed real Azure/edge-tts voice names. Known tradeoff (see module
-# docstring): still more synthetic-sounding than English neural voices, a
-# real limitation of Telugu TTS across every provider today.
-EDGE_TTS_VOICE = "te-IN-MohanNeural"
-EDGE_TTS_RATE = "+15%"  # positive = faster; tune further if still too slow/fast
+# Gemini TTS via OpenRouter -- see module docstring. "Zephyr" is one of
+# Gemini's ~30 voice names (confirmed valid from OpenRouter's own code
+# sample); these are language-agnostic character voices, not locale-specific
+# like edge-tts's te-IN-* names -- Gemini is expected to speak whatever
+# language the input text is in, so passing Telugu text should get Telugu
+# audio. Swap to a different voice name from Google's Gemini TTS voice list
+# if this one doesn't suit the "Srinivas" persona.
+OPENROUTER_TTS_MODEL = "google/gemini-3.1-flash-tts-preview"
+OPENROUTER_TTS_VOICE = "Zephyr"
+OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
+TTS_TIMEOUT_S = 15
 
 print("Loading embedder + knowledge base...")
 # Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
@@ -226,19 +229,23 @@ def generate_response(user_text: str, chat_history=None) -> dict:
     return {"reply": reply, "suppressed": False, "elapsed": time.time() - t0}
 
 
-async def _edge_tts_mp3_bytes(text: str) -> bytes:
-    communicate = edge_tts.Communicate(text, EDGE_TTS_VOICE, rate=EDGE_TTS_RATE)
-    chunks = []
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            chunks.append(chunk["data"])
-    return b"".join(chunks)
-
-
 def synthesize_pcm(text: str):
-    """Returns (mono int16 PCM samples, sample_rate) -- edge-tts's native
-    output rate, so callers must resample to whatever they actually need."""
-    mp3_bytes = asyncio.run(_edge_tts_mp3_bytes(text))
-    audio = AudioSegment.from_file(io.BytesIO(mp3_bytes), format="mp3").set_channels(1)
+    """Returns (mono int16 PCM samples, sample_rate) -- callers must resample
+    to whatever they actually need."""
+    response = requests.post(
+        url=OPENROUTER_TTS_URL,
+        headers={
+            "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": OPENROUTER_TTS_MODEL,
+            "input": text,
+            "voice": OPENROUTER_TTS_VOICE,
+        },
+        timeout=TTS_TIMEOUT_S,
+    )
+    response.raise_for_status()
+    audio = AudioSegment.from_file(io.BytesIO(response.content), format="mp3").set_channels(1)
     samples = np.array(audio.get_array_of_samples(), dtype=np.int16)
     return samples, audio.frame_rate

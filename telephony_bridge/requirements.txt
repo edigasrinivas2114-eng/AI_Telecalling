@@ -7,13 +7,13 @@ scipy
 webrtcvad-wheels==2.0.14  # prebuilt wheels for webrtcvad (import name is still "webrtcvad") -- avoids needing a C compiler
 openai>=1.0.0     # used as an OpenAI-compatible client pointed at OpenRouter (not OpenAI itself) --
                   # reaches Claude Haiku 4.5 via OpenRouter; needs OPENROUTER_API_KEY set (see README)
-requests          # raw HTTP call to OpenRouter's audio transcription endpoint (openai/whisper-large-v3-turbo) --
-                  # its request shape (JSON + base64 audio) doesn't match the openai package's
-                  # audio.transcriptions helper (which expects multipart file upload), so this
-                  # calls it directly instead. faster-whisper (local Whisper) removed -- STT now
-                  # runs hosted on OpenRouter, not on this machine's CPU (see pipeline.py for why).
-edge-tts==7.2.8  # free access to Microsoft's neural TTS voices, no API key/account needed
-pydub==0.25.1    # decodes edge-tts's mp3 output to raw PCM -- needs ffmpeg installed (see README)
+requests          # raw HTTP calls to OpenRouter's audio transcription endpoint
+                  # (openai/whisper-large-v3-turbo) and speech endpoint
+                  # (google/gemini-3.1-flash-tts-preview) -- neither request shape matches
+                  # the openai package's own audio helpers, so these call OpenRouter
+                  # directly instead. faster-whisper and edge-tts both removed -- STT and
+                  # TTS now both run hosted on OpenRouter (see pipeline.py for why).
+pydub==0.25.1    # decodes the TTS endpoint's mp3 output to raw PCM -- needs ffmpeg installed (see README)
 audioop-lts      # pydub's set_channels() needs the stdlib "audioop" module, removed in Python 3.13+;
                  # this restores it. No prebuilt wheel for plain (non free-threaded) Python 3.14 yet,
                  # so pip will compile it from source -- needs build-essential + python3.14-dev,
