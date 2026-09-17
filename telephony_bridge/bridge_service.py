@@ -279,15 +279,24 @@ class CallHandler(socketserver.BaseRequestHandler):
                 )
                 keepalive_thread.start()
                 try:
+                    # Peak/RMS of the raw captured audio -- printed alongside every
+                    # STT result so a run of empty transcriptions can be told apart
+                    # from a genuine mic/gain problem (peak near 0 on int16's
+                    # -32768..32767 range) versus audio that's actually there but
+                    # Whisper still can't use (peak/RMS in a normal range).
+                    peak = int(np.abs(pcm_8k).max()) if len(pcm_8k) else 0
+                    rms = float(np.sqrt(np.mean(pcm_8k.astype(np.float64) ** 2))) if len(pcm_8k) else 0.0
+
                     t0 = time.time()
                     pcm_16k_f32 = resample(pcm_8k, SAMPLE_RATE, 16000) / 32768.0
                     caller_text = pipeline.transcribe_pcm(pcm_16k_f32)
                     stt_elapsed = time.time() - t0
                     if not caller_text:
-                        print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms] "
-                              f"heard nothing usable -- check mic input / VAD sensitivity")
+                        print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms, "
+                              f"peak={peak} rms={rms:.0f}] heard nothing usable -- check mic input / VAD sensitivity")
                         continue
-                    print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms] \"{caller_text}\"")
+                    print(f"[call {call_id}] [STT {stt_elapsed:.2f}s, captured {captured_ms}ms, "
+                          f"peak={peak} rms={rms:.0f}] \"{caller_text}\"")
 
                     result = pipeline.generate_response(caller_text, chat_history=chat_history)
                     print(f"[call {call_id}] [LLM {result['elapsed']:.2f}s] "
