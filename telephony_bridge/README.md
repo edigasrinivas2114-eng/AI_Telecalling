@@ -48,20 +48,20 @@ still through the same OpenRouter account rather than a separate Anthropic one.)
 See setup step 2 below.
 
 Why TTS is different here than in the notebook: Piper's voices sound
-noticeably synthetic. Several Telugu-capable options were tried after that --
-**edge-tts** (Microsoft's neural voices, still sounded synthetic for Telugu
-specifically), **Google's Gemini 3.1 Flash TTS Preview via OpenRouter**
-(broad claimed language coverage, but Telugu support was never confirmed),
-and **Sarvam AI's Bulbul v3** (trained specifically on Indian languages, but
-needs a separate paid account outside OpenRouter). TTS now runs on
-**Deepgram Aura-2 via OpenRouter** (`deepgram/aura-2`) instead -- clearer,
-faster (purpose-built for low-latency conversational voice agents, unlike
-Gemini's 6-12+ second replies), but **English-only**, so the whole script
-(system prompt, consent disclosure, opt-out reply in `programme_config.py`)
-now runs in English too, a deliberate trade-off away from this project's
-actual Telugu-speaking audience made explicitly for voice quality/speed. If
-Telugu comes back as a requirement, both `pipeline.py`'s TTS and
-`programme_config.py` need to change together again.
+noticeably synthetic. Several other options were tried after that --
+**edge-tts** (Microsoft's neural voices, synthetic-sounding for Telugu),
+**Google's Gemini 3.1 Flash TTS Preview via OpenRouter** and **Sarvam AI's
+Bulbul v3** (Telugu-capable, but Sarvam needs a separate paid account and
+Gemini's Telugu quality wasn't good enough on a real test call), and
+**Deepgram Aura-2 via OpenRouter** (clearer/faster, but English-only, which
+meant running the whole script in English). TTS now runs on **ElevenLabs**
+(`eleven_flash_v2_5`, their lowest-latency model) with a specific custom
+voice picked and previewed outside this codebase -- another separate paid
+account outside OpenRouter (ElevenLabs isn't in OpenRouter's TTS catalog at
+all), chosen for a further step up in voice quality for a real
+business-facing bot. English-only in practice (the voice/model weren't
+chosen or tested for Telugu), so this continues on the English script from
+the Deepgram phase.
 
 ## What's in this folder
 
@@ -69,11 +69,12 @@ Telugu comes back as a requirement, both `pipeline.py`'s TTS and
   (Exotel AgentStream) to the STT/RAG/LLM/TTS pipeline.
 - `pipeline.py` -- STT (Whisper Large V3 Turbo, hosted via OpenRouter), RAG
   (Chroma + sentence-transformers), LLM (Claude Haiku 4.5 via OpenRouter),
-  TTS (Deepgram Aura-2, hosted via OpenRouter).
+  TTS (ElevenLabs, `eleven_flash_v2_5`).
 - `programme_config.py` -- the same editable programme pitch variables as the
   notebook. Edit the values here too.
-- `test_deepgram_tts_direct.py` -- standalone script to preview the TTS voice
-  without needing a full call.
+- `test_deepgram_tts_direct.py` -- standalone script for previewing Deepgram
+  Aura-2 voices (kept from an earlier phase -- useful again if TTS ever
+  moves back to Deepgram).
 - `requirements.txt` -- Python dependencies for this service.
 
 ## Setup
@@ -109,10 +110,29 @@ no code change needed if you rotate the key later, just update the env var and
 restart the bridge. This is billed against your OpenRouter credit balance --
 `pipeline.py`'s `OPENROUTER_MODEL` (`anthropic/claude-haiku-4.5`) is a paid
 model, so calls cost something per use, same as calling Claude directly would.
-TTS (`deepgram/aura-2`) is billed against this same OpenRouter account and key
--- no separate signup needed for it.
 
-### 3. Install Python dependencies for the bridge
+### 3. Get an ElevenLabs API key and voice
+
+TTS runs on ElevenLabs, a separate account/API key from OpenRouter (ElevenLabs
+isn't in OpenRouter's TTS catalog).
+
+1. Go to https://elevenlabs.io/ and sign in (or create an account).
+2. Create/select the voice you want the bot to use, and copy its **Voice ID**
+   from the Voice Library (not a secret, safe to note down normally).
+3. Create an API key from your ElevenLabs account settings.
+4. **Never paste the API key into a chat with me or commit it to git** -- set
+   it and the voice ID as environment variables instead:
+```bash
+echo 'export ELEVENLABS_API_KEY="your-key-here"' >> ~/.bashrc
+echo 'export ELEVENLABS_VOICE_ID="your-voice-id-here"' >> ~/.bashrc
+source ~/.bashrc
+```
+The `elevenlabs` Python package (installed in the next step) reads both via
+`pipeline.py` -- no code change needed to rotate the key or swap voices, just
+update the env vars and restart the bridge. This is billed against your
+ElevenLabs account, separately from OpenRouter.
+
+### 4. Install Python dependencies for the bridge
 
 ```bash
 cd telephony_bridge
@@ -126,20 +146,16 @@ pip install -r requirements.txt
 ```
 
 No voice file to download this time -- the TTS request goes out live over the network on
-each call, using the voice name set in `pipeline.py` (`OPENROUTER_TTS_VOICE`, currently
-`"aura-2-draco-en"`, a British male voice -- one of Aura-2's ~40 voice names, English-only,
-no other language available for this model, and no Indian-English accent among its American/
-British/Australian/Irish/Filipino options either). There's no local CLI to preview a voice
-before committing to it -- `test_deepgram_tts_direct.py` in this folder is a quick standalone
-script for that: edit the `text`/`voice` in it and run `python3 test_deepgram_tts_direct.py`
-to save an mp3 you can listen to without needing a full test call.
+each call, using the voice set in `pipeline.py` (`ELEVENLABS_VOICE_ID`, read from the
+`ELEVENLABS_VOICE_ID` env var set in step 3). Preview voices directly in your ElevenLabs
+account's Voice Library before picking one -- no need to run any code to hear a sample.
 
-### 4. Edit the programme details
+### 5. Edit the programme details
 
 Open `programme_config.py` and fill in the real `PROGRAMME_*` / `CERTIFICATION_NAME`
 / `COMPANY_NAME` values (same as you did in the notebook).
 
-### 5. Start the bridge service and expose it publicly
+### 6. Start the bridge service and expose it publicly
 
 ```bash
 python3 bridge_service.py
@@ -160,7 +176,7 @@ step 1. The `?sample-rate=8000` query param tells Exotel to stream audio at
 deployment (not just local testing), point the Voicebot Applet at your
 server's actual public address instead of an ngrok tunnel.
 
-### 6. Test with a real call
+### 7. Test with a real call
 
 Call your Exotel trial number from your own phone. You should hear the AI's
 consent disclosure, then be able to talk to it -- ask about the fee, the
@@ -178,11 +194,11 @@ if you see it, so the parsing can be corrected.
   funded `OPENROUTER_API_KEY` -- STT moved off this machine's CPU specifically
   because local transcription kept hitting unpredictable multi-second-to-a-minute
   stalls; hosted Whisper trades a small per-call cost for reliability and speed.
-- TTS also costs real money now and needs live internet access (Deepgram
-  Aura-2 via OpenRouter, same funded `OPENROUTER_API_KEY` as the LLM/STT) --
-  unlike Piper, it won't work offline. It's English-only, which is why this
-  whole script currently runs in English rather than Telugu -- see the TTS
-  note near the top of this file.
+- TTS also costs real money now and needs live internet access (ElevenLabs,
+  a separate funded `ELEVENLABS_API_KEY` from OpenRouter's LLM/STT) -- unlike
+  Piper, it won't work offline. The voice/model in use weren't chosen or
+  tested for Telugu, which is why this whole script currently runs in
+  English -- see the TTS note near the top of this file.
 - Exotel's trial account can usually only call/receive from phone numbers
   you've manually verified in their console -- fine for testing, not for
   calling arbitrary leads until the account is upgraded off the trial tier.

@@ -23,22 +23,21 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   provider). This paid model avoids the shared free-tier pool entirely.
   Needs an OPENROUTER_API_KEY env var with a funded OpenRouter credit balance
   (see README).
-- TTS: Deepgram Aura-2, hosted via OpenRouter (`deepgram/aura-2`). This is an
-  English-only model -- it has no Telugu (or any non-English) voice at all --
-  so using it meant switching the whole script (system prompt, consent
-  disclosure, opt-out reply in programme_config.py) to English, a deliberate
-  trade-off away from this project's actual Telugu-speaking audience, made
-  explicitly for better voice quality and much lower latency than the
-  Telugu-capable options tried before it (Gemini TTS routinely took
-  6-12+ seconds per reply; Deepgram is purpose-built for low-latency
-  conversational voice agents). If Telugu comes back as a requirement later,
-  this is the piece that needs to change again, alongside programme_config.py.
-  Requests `response_format: "pcm"` explicitly -- OpenRouter's /audio/speech
-  endpoint defaults to raw PCM already (the opposite of OpenAI's own API,
-  which defaults to mp3), but asking for it outright avoids relying on an
-  undocumented default. Same content-type-parsing approach already proven
-  correct for the Gemini TTS integration this replaced (rate/channels read
-  from `Content-Type: audio/pcm;rate=<N>;channels=<N>`).
+- TTS: ElevenLabs (`eleven_flash_v2_5`, their lowest-latency model, ~75ms
+  claimed), a separate paid account/API key from OpenRouter -- ElevenLabs
+  isn't in OpenRouter's TTS catalog at all. Replaced Deepgram Aura-2 via
+  OpenRouter on the theory that ElevenLabs' voice quality is a further step
+  up for a real business-facing bot, using a specific custom voice ("Maya")
+  picked and previewed outside this codebase. Uses the official `elevenlabs`
+  Python SDK (matches the project's pattern of preferring an official SDK
+  over hand-rolled HTTP once one exists -- same reasoning as Sarvam earlier).
+  Requests `output_format="pcm_16000"` -- raw 16-bit PCM at 16kHz, no
+  container to decode, consistent with how every other TTS integration in
+  this file has ended up shaped. `convert()` returns a generator of byte
+  chunks, not a single bytes object -- confirmed before writing this, since
+  assuming otherwise breaks silently (the exact class of surprise the
+  earlier OpenRouter/Gemini mp3-vs-raw-PCM mixup was). Needs
+  ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID env vars (see README).
 """
 
 import base64
@@ -53,6 +52,7 @@ import chromadb
 import numpy as np
 import openai
 import requests
+from elevenlabs.client import ElevenLabs
 from sentence_transformers import SentenceTransformer
 
 from programme_config import (
@@ -78,17 +78,14 @@ OPENROUTER_STT_MODEL = "openai/whisper-large-v3-turbo"
 OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 STT_TIMEOUT_S = 15  # generous for a network call; hosted Whisper itself is very fast
 
-# Deepgram Aura-2 via OpenRouter -- see module docstring. English-only, and
-# Aura-2 has no Indian-English accent at all (only American, British,
-# Australian, Irish, Filipino) -- "aura-2-draco-en" is one of its British
-# male voices, picked over the earlier "aura-2-arcas-en" (American) on the
-# theory that British English pronunciation/vocabulary is generally more
-# familiar to Indian English speakers/listeners than American -- still not a
-# genuine Indian accent, which no OpenRouter TTS model currently offers.
-OPENROUTER_TTS_MODEL = "deepgram/aura-2"
-OPENROUTER_TTS_VOICE = "aura-2-draco-en"
-OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
-TTS_TIMEOUT_S = 15
+# ElevenLabs -- see module docstring. Separate account/API key from
+# OpenRouter. ELEVENLABS_VOICE_ID is the "Maya" custom voice's ID from the
+# ElevenLabs dashboard (Voice Library -> Maya -> copy Voice ID) -- not a
+# secret, but still an env var so swapping voices needs no code change.
+ELEVENLABS_MODEL = "eleven_flash_v2_5"  # lowest-latency ElevenLabs model (~75ms claimed)
+ELEVENLABS_OUTPUT_FORMAT = "pcm_16000"  # raw 16-bit PCM at 16kHz, no container to decode
+elevenlabs_client = ElevenLabs(api_key=os.environ["ELEVENLABS_API_KEY"])
+ELEVENLABS_VOICE_ID = os.environ["ELEVENLABS_VOICE_ID"]
 
 print("Loading embedder + knowledge base...")
 # Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
@@ -242,30 +239,16 @@ def generate_response(user_text: str, chat_history=None) -> dict:
 def synthesize_pcm(text: str):
     """Returns (mono int16 PCM samples, sample_rate) -- callers must resample
     to whatever they actually need."""
-    response = requests.post(
-        url=OPENROUTER_TTS_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": OPENROUTER_TTS_MODEL,
-            "input": text,
-            "voice": OPENROUTER_TTS_VOICE,
-            "response_format": "pcm",
-        },
-        timeout=TTS_TIMEOUT_S,
+    audio_chunks = elevenlabs_client.text_to_speech.convert(
+        text=text,
+        voice_id=ELEVENLABS_VOICE_ID,
+        model_id=ELEVENLABS_MODEL,
+        output_format=ELEVENLABS_OUTPUT_FORMAT,
     )
-    response.raise_for_status()
+    # convert() returns a generator of byte chunks, not a single bytes object --
+    # must iterate and join, not assume a plain bytes/response object.
+    raw_pcm = b"".join(audio_chunks)
 
-    # Raw headerless PCM -- Content-Type looks like "audio/pcm;rate=24000;channels=1".
-    content_type = response.headers.get("content-type", "")
-    rate_match = re.search(r"rate=(\d+)", content_type)
-    channels_match = re.search(r"channels=(\d+)", content_type)
-    sample_rate = int(rate_match.group(1)) if rate_match else 24000
-    channels = int(channels_match.group(1)) if channels_match else 1
-
-    samples = np.frombuffer(response.content, dtype="<i2")
-    if channels > 1:
-        samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
+    samples = np.frombuffer(raw_pcm, dtype="<i2")
+    sample_rate = int(ELEVENLABS_OUTPUT_FORMAT.split("_")[1])
     return samples, sample_rate
