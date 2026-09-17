@@ -223,7 +223,25 @@ def speak(sock: socket.socket, text: str, lock: threading.Lock, state: CallState
     """Synthesizes and plays `text`, stopping early if the caller starts
     talking (barge-in). Returns True if the reply was cut short."""
     t0 = time.time()
-    pcm_native, native_rate = pipeline.synthesize_pcm(text)
+    # synthesize_pcm() is a slow network round-trip (Gemini TTS has taken
+    # 6-12+ seconds in real testing) -- Asterisk's AudioSocket app kills the
+    # call after ~2s of the bridge sending nothing back, so without a
+    # keepalive running here too, a slow synthesis call gets the connection
+    # closed out from under it before the first real audio frame is even
+    # sent (this crashed the very first greeting with a BrokenPipeError on a
+    # real test call). The main loop's own keepalive only covers STT/LLM,
+    # not this call, and the initial greeting's speak() call has no
+    # surrounding keepalive at all -- so this needs to be self-contained.
+    keepalive_stop = threading.Event()
+    keepalive_thread = threading.Thread(
+        target=run_keepalive, args=(sock, lock, keepalive_stop), daemon=True
+    )
+    keepalive_thread.start()
+    try:
+        pcm_native, native_rate = pipeline.synthesize_pcm(text)
+    finally:
+        keepalive_stop.set()
+        keepalive_thread.join()
     pcm_8k = resample(pcm_native, native_rate, SAMPLE_RATE).astype(np.int16)
     synth_elapsed = time.time() - t0
     print(f"  [TTS {synth_elapsed:.2f}s] \"{text}\"")
@@ -254,9 +272,8 @@ class CallHandler(socketserver.BaseRequestHandler):
         reader_thread = threading.Thread(target=audio_reader, args=(sock, state, call_id), daemon=True)
         reader_thread.start()
 
-        speak(sock, CONSENT_DISCLOSURE, write_lock, state)
-
         try:
+            speak(sock, CONSENT_DISCLOSURE, write_lock, state)
             while not state.hangup.is_set():
                 state.turn_ready.wait()
                 if state.hangup.is_set():
