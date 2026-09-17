@@ -11,11 +11,17 @@ websockets>=12.0  # the bridge server itself -- Exotel's AgentStream connects ov
                   # TCP protocol. >=12.0 for the modern single-argument handler signature.
 openai>=1.0.0     # used as an OpenAI-compatible client pointed at OpenRouter (not OpenAI itself) --
                   # reaches Claude Haiku 4.5 via OpenRouter; needs OPENROUTER_API_KEY set (see README)
-requests          # raw HTTP calls to OpenRouter's audio transcription endpoint
-                  # (openai/whisper-large-v3-turbo) and speech endpoint
-                  # (deepgram/aura-2) -- neither request shape matches the openai
-                  # package's own audio helpers, so these call OpenRouter directly
-                  # instead. faster-whisper removed -- STT and TTS both run hosted
-                  # on OpenRouter now (see pipeline.py for why). The speech endpoint
-                  # returns raw PCM directly (no audio container), so no decoding
-                  # library (pydub/ffmpeg) is needed for it.
+requests          # raw HTTP call to OpenRouter's audio transcription endpoint
+                  # (openai/whisper-large-v3-turbo) -- its request shape doesn't
+                  # match the openai package's own audio helpers, so this calls
+                  # OpenRouter directly instead. faster-whisper removed -- STT
+                  # runs hosted on OpenRouter now (see pipeline.py for why).
+sarvamai>=0.1.29  # official SDK for Sarvam AI's Bulbul TTS -- English, Telugu, and
+                  # Tamil support confirmed in one account/model, needed now that
+                  # the project must work in all three languages (see pipeline.py
+                  # and programme_config.py). >=0.1.29 because the SDK's
+                  # text_to_speech.convert() parameter was renamed
+                  # target_language_code -> language_code in that release; this
+                  # code uses the new name. Needs a separate SARVAM_API_KEY env
+                  # var (see README) -- a different account/key from OpenRouter,
+                  # since OpenRouter doesn't host this model.

@@ -15,16 +15,29 @@ The script's opening also assumes a known lead name from a dialer/CRM ("am I
 speaking with [Lead Name]?"), which this test system doesn't have yet -- the
 AI asks for the caller's name instead.
 
-LANGUAGE NOTE: back to English (again) per explicit request, after multiple
-rounds trying to get Telugu TTS quality/reliability right -- edge-tts's
-Microsoft voices sounded synthetic for Telugu, Google's Gemini 3.1 Flash TTS
-had unconfirmed Telugu support, and Sarvam AI's Bulbul TTS (trained
-specifically on Indian languages) would have needed a separate paid account.
-pipeline.py now uses Deepgram Aura-2 via OpenRouter, which sounds clear and
-fast but is English-only -- there is no Telugu voice for it at all, so
-CONSENT_DISCLOSURE and OPT_OUT_REPLY below are English again, and
-SYSTEM_PROMPT_TEMPLATE instructs English replies. If Telugu comes back as a
-requirement, this file and pipeline.py's TTS both need to change together.
+LANGUAGE NOTE: this now needs to work in three languages -- English, Telugu,
+and Tamil -- before deployment, per explicit requirement. pipeline.py uses
+Sarvam AI's Bulbul v3 for TTS (the only option found with confirmed support
+for all three in one account) and SYSTEM_PROMPT_TEMPLATE instructs the LLM
+to detect which of the three the caller is using and reply in that same
+language; pipeline.py then picks the TTS language to speak each reply in by
+checking the *reply text's own Unicode script*, not by tracking a
+per-call language separately.
+
+Deliberately NOT implemented yet: an explicit caller-facing language picker
+("For English, say English; Telugu కోసం తెలుగు చెప్పండి; தமிழுக்கு தமிழ் என்று
+சொல்லவும்") at the start of the call -- the more reliable pattern for real
+IVR/telecalling systems, versus hoping auto-detection from however the caller
+first speaks works out. This was explicitly deferred until the auto-detect
+version is confirmed working end-to-end; add it as the next language-handling
+step after that.
+
+Known gap from deferring the picker: CONSENT_DISCLOSURE below (the very
+first thing played, before the caller has said anything for the LLM to
+detect a language from) has to be fixed in one language -- kept as English
+for now. OPT_OUT_REPLY bypasses the LLM entirely (it's a direct trigger
+match in `is_opt_out_request`), so it's keyed by the detected language of
+the caller's own opt-out phrase instead.
 """
 
 COMPANY_NAME = "Raga Tech Source"
@@ -60,7 +73,17 @@ CONSENT_DISCLOSURE = (
     "This call is being recorded. Could you tell me your name?"
 )
 
-OPT_OUT_REPLY = "Understood, we won't call you again. Thank you!"
+# Keyed by Sarvam language code -- see pipeline.py's generate_response(),
+# which picks the entry matching the detected language of the caller's own
+# opt-out phrase (this reply bypasses the LLM entirely, so there's no
+# generated reply text to detect a script from the way TTS routing does).
+# Telugu/Tamil translations are NOT verified by a native speaker -- please
+# have someone check these before relying on them for real calls.
+OPT_OUT_REPLY = {
+    "en-IN": "Understood, we won't call you again. Thank you!",
+    "te-IN": "అర్థమైంది, ఇకపై మీకు కాల్ చేయము. ధన్యవాదాలు!",
+    "ta-IN": "புரிந்தது, இனி உங்களை அழைக்க மாட்டோம். நன்றி!",
+}
 
 SYSTEM_PROMPT_TEMPLATE = f"""You are {AGENT_DISPLAY_NAME}, an AI voice agent for {COMPANY_NAME}, an outbound \
 caller reaching leads who have shown interest in a training programme. Follow this call flow, \
@@ -120,9 +143,12 @@ necessary (like listing the three tracks in step 3). Never pad with extra pleasa
 or repeating what you just said -- this is a live phone call, not a written chat, and every extra
 word adds real delay before the caller hears anything.
 
-Keep responses in English. Never use markdown formatting (asterisks, bullet points, headers, \
-etc.) -- this reply is spoken aloud by a text-to-speech voice, not displayed as text, so write \
-it as plain spoken sentences.
+LANGUAGE: detect which of English, Telugu (తెలుగు), or Tamil (தமிழ்) the caller is speaking, \
+and reply in that same language -- switch if they switch mid-call. It's natural to keep company/ \
+track/product names (like {COMPANY_NAME} or "Full Stack + AI") in English within an otherwise \
+Telugu or Tamil sentence, the way people actually speak. Never use markdown formatting (asterisks, \
+bullet points, headers, etc.) -- this reply is spoken aloud by a text-to-speech voice, not \
+displayed as text, so write it as plain spoken sentences.
 """
 
 KNOWLEDGE_BASE = [
@@ -143,6 +169,9 @@ OPT_OUT_PHRASES = [
     # Telugu equivalents -- NOT verified by a native speaker, please check/expand these.
     # Roughly: "don't call", "I don't want calls", "remove the number", "don't call again".
     "కాల్ చేయవద్దు", "నాకు కాల్ వద్దు", "నంబర్ తీసేయండి", "మళ్ళీ కాల్ చేయవద్దు",
+    # Tamil equivalents -- NOT verified by a native speaker, please check/expand these.
+    # Roughly: "don't call", "I don't want calls", "remove the number", "don't call again".
+    "அழைக்க வேண்டாம்", "எனக்கு அழைப்பு வேண்டாம்", "நம்பரை நீக்கவும்", "மீண்டும் அழைக்க வேண்டாம்",
 ]
 
 

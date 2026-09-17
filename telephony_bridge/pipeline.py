@@ -23,22 +23,27 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   provider). This paid model avoids the shared free-tier pool entirely.
   Needs an OPENROUTER_API_KEY env var with a funded OpenRouter credit balance
   (see README).
-- TTS: Deepgram Aura-2, hosted via OpenRouter (`deepgram/aura-2`). This is an
-  English-only model -- it has no Telugu (or any non-English) voice at all --
-  so using it meant switching the whole script (system prompt, consent
-  disclosure, opt-out reply in programme_config.py) to English, a deliberate
-  trade-off away from this project's actual Telugu-speaking audience, made
-  explicitly for better voice quality and much lower latency than the
-  Telugu-capable options tried before it (Gemini TTS routinely took
-  6-12+ seconds per reply; Deepgram is purpose-built for low-latency
-  conversational voice agents). If Telugu comes back as a requirement later,
-  this is the piece that needs to change again, alongside programme_config.py.
-  Requests `response_format: "pcm"` explicitly -- OpenRouter's /audio/speech
-  endpoint defaults to raw PCM already (the opposite of OpenAI's own API,
-  which defaults to mp3), but asking for it outright avoids relying on an
-  undocumented default. Same content-type-parsing approach already proven
-  correct for the Gemini TTS integration this replaced (rate/channels read
-  from `Content-Type: audio/pcm;rate=<N>;channels=<N>`).
+- TTS: Sarvam AI's Bulbul v3 (`bulbul:v3`), a separate paid account/API key
+  from OpenRouter (not in OpenRouter's TTS catalog). Replaces Deepgram Aura-2,
+  which is English-only -- the project now needs to work in three languages
+  (English, Telugu, Tamil) before deployment, and Sarvam is the only TTS
+  option found so far with confirmed support for all three in one account
+  (Gemini's Telugu quality tested poorly; Deepgram has no Indian languages at
+  all). Same speaker name is used across all three languages for a
+  consistent persona -- Sarvam's own docs note voice quality varies by
+  language and publish per-language recommendations, so this hasn't been
+  verified as the best-sounding choice for Tamil/Telugu specifically, just a
+  reasonable starting point.
+- Language handling: no caller-facing language picker yet (deliberately
+  deferred -- see programme_config.py) -- the LLM is instructed to detect
+  which of the three languages the caller is using and reply in that same
+  language, and `_detect_script()` below looks at the *reply text's actual
+  Unicode script* to decide which Sarvam `language_code` to speak it in,
+  since that's simpler and more reliable than trying to detect the caller's
+  spoken language from noisy ASR output. STT's language hint is dropped
+  entirely (was pinned to one language before) so Whisper can auto-detect
+  across all three instead of being biased toward whichever one used to be
+  hardcoded.
 """
 
 import base64
@@ -53,6 +58,7 @@ import chromadb
 import numpy as np
 import openai
 import requests
+from sarvamai import SarvamAI
 from sentence_transformers import SentenceTransformer
 
 from programme_config import (
@@ -78,17 +84,28 @@ OPENROUTER_STT_MODEL = "openai/whisper-large-v3-turbo"
 OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 STT_TIMEOUT_S = 15  # generous for a network call; hosted Whisper itself is very fast
 
-# Deepgram Aura-2 via OpenRouter -- see module docstring. English-only, and
-# Aura-2 has no Indian-English accent at all (only American, British,
-# Australian, Irish, Filipino) -- "aura-2-draco-en" is one of its British
-# male voices, picked over the earlier "aura-2-arcas-en" (American) on the
-# theory that British English pronunciation/vocabulary is generally more
-# familiar to Indian English speakers/listeners than American -- still not a
-# genuine Indian accent, which no OpenRouter TTS model currently offers.
-OPENROUTER_TTS_MODEL = "deepgram/aura-2"
-OPENROUTER_TTS_VOICE = "aura-2-draco-en"
-OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
-TTS_TIMEOUT_S = 15
+# Sarvam AI's Bulbul TTS -- see module docstring. A separate paid account
+# from OpenRouter; reads its own key from SARVAM_API_KEY (see README). "anand"
+# is one of bulbul:v3's ~39 speaker names, confirmed valid for this model
+# version (speaker names aren't interchangeable across bulbul versions) --
+# used across all three languages for a consistent persona.
+SARVAM_TTS_MODEL = "bulbul:v3"
+SARVAM_TTS_SPEAKER = "anand"
+sarvam_client = SarvamAI(api_subscription_key=os.environ["SARVAM_API_KEY"])
+
+# Unicode script ranges used to pick which language to speak a reply in --
+# see module docstring for why this checks the reply text's own script
+# rather than trying to detect the caller's spoken language directly.
+_TELUGU_SCRIPT_RE = re.compile(r"[ఀ-౿]")
+_TAMIL_SCRIPT_RE = re.compile(r"[஀-௿]")
+
+
+def _sarvam_language_code(text: str) -> str:
+    if _TELUGU_SCRIPT_RE.search(text):
+        return "te-IN"
+    if _TAMIL_SCRIPT_RE.search(text):
+        return "ta-IN"
+    return "en-IN"
 
 print("Loading embedder + knowledge base...")
 # Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
@@ -126,13 +143,14 @@ def retrieve_context(query: str, k: int = 2) -> str:
     return "\n".join(results["documents"][0])
 
 
-# Cyrillic (U+0400-04FF) and Devanagari (U+0900-097F) -- a Telugu- or
-# English-speaking caller can never genuinely produce either script. Real
-# test calls showed the hosted STT hallucinating full sentences in these
-# scripts on noisy/ambiguous clips (the `language` hint below doesn't fully
-# prevent this), so any transcription containing them is almost certainly
-# garbage, not real speech -- treat it as "heard nothing" rather than
-# passing hallucinated text to the LLM.
+# Cyrillic (U+0400-04FF) and Devanagari (U+0900-097F) -- none of this
+# project's three supported languages (English, Telugu, Tamil) are written
+# in either script (Telugu and Tamil have their own distinct Unicode blocks,
+# separate from Devanagari, which is Hindi/Sanskrit's script). Real test
+# calls showed the hosted STT hallucinating full sentences in these scripts
+# on noisy/ambiguous clips, so any transcription containing them is almost
+# certainly garbage, not real speech -- treat it as "heard nothing" rather
+# than passing hallucinated text to the LLM.
 _INVALID_SCRIPT_RE = re.compile(r"[Ѐ-ӿऀ-ॿ]")
 
 
@@ -165,17 +183,14 @@ def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
             data=json.dumps({
                 "model": OPENROUTER_STT_MODEL,
                 "input_audio": {"data": b64_audio, "format": "wav"},
-                # "en" (ISO-639-1) -- the standard Whisper language-hint param name;
-                # not confirmed against OpenRouter's own docs for this endpoint (the
-                # sample we had didn't show it), but without it short/ambiguous clips
-                # were being auto-detected as random languages/scripts. Was "te" from
-                # when the script was in Telugu -- left stale after the switch to
-                # English (programme_config.py), which meant Whisper was being hinted
-                # toward the wrong language/script even on clear, loud English audio,
-                # producing empty or garbled-Telugu-script transcriptions instead of
-                # real English text. Keep this in sync with whatever language
-                # programme_config.py's SYSTEM_PROMPT_TEMPLATE actually uses.
-                "language": "en",
+                # No "language" hint on purpose -- this used to be pinned to a
+                # single language (English or Telugu depending on which phase
+                # of the project this was), but now that callers may speak
+                # English, Telugu, or Tamil, hinting one language would bias
+                # Whisper against the other two. Letting it auto-detect is the
+                # right tradeoff now; the script-based hallucination filter
+                # below still catches confidently-wrong-script garbage either
+                # way.
             }),
             timeout=STT_TIMEOUT_S,
         )
@@ -199,7 +214,10 @@ def generate_response(user_text: str, chat_history=None) -> dict:
 
     if is_opt_out_request(user_text):
         SUPPRESSION_LIST.append(user_text)
-        reply = OPT_OUT_REPLY
+        # This reply bypasses the LLM entirely, so there's no generated reply
+        # text to route TTS by script the way normal replies are -- detect
+        # the language from the caller's own opt-out phrase instead.
+        reply = OPT_OUT_REPLY[_sarvam_language_code(user_text)]
         return {"reply": reply, "suppressed": True, "elapsed": time.time() - t0}
 
     context_text = retrieve_context(user_text, k=2)
@@ -209,8 +227,14 @@ def generate_response(user_text: str, chat_history=None) -> dict:
         "content": f"RETRIEVED CONTEXT:\n{context_text}\n\nCALLER SAID: {user_text}",
     })
 
-    # Spoken fallback on API failure only, never sent anywhere as text.
-    fallback_reply = "One moment, let me try that again."
+    # Spoken fallback on API failure only, never sent anywhere as text. Same
+    # reasoning as the opt-out reply above -- no LLM output to route TTS by
+    # script here, so detect the language from what the caller just said.
+    fallback_reply = {
+        "en-IN": "One moment, let me try that again.",
+        "te-IN": "ఒక్క నిమిషం, మళ్ళీ ప్రయత్నిస్తాను.",
+        "ta-IN": "ஒரு நிமிடம், மீண்டும் முயற்சிக்கிறேன்.",
+    }[_sarvam_language_code(user_text)]
 
     try:
         # OpenAI-style chat payload: system prompt goes inside `messages` as
@@ -242,30 +266,21 @@ def generate_response(user_text: str, chat_history=None) -> dict:
 def synthesize_pcm(text: str):
     """Returns (mono int16 PCM samples, sample_rate) -- callers must resample
     to whatever they actually need."""
-    response = requests.post(
-        url=OPENROUTER_TTS_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": OPENROUTER_TTS_MODEL,
-            "input": text,
-            "voice": OPENROUTER_TTS_VOICE,
-            "response_format": "pcm",
-        },
-        timeout=TTS_TIMEOUT_S,
+    language_code = _sarvam_language_code(text)
+    response = sarvam_client.text_to_speech.convert(
+        text=text,
+        language_code=language_code,
+        model=SARVAM_TTS_MODEL,
+        speaker=SARVAM_TTS_SPEAKER,
+        speech_sample_rate=8000,  # matches AudioSocket/Exotel's native rate -- no resampling needed
     )
-    response.raise_for_status()
+    audio_bytes = base64.b64decode(response.audios[0])
+    with wave.open(io.BytesIO(audio_bytes), "rb") as wf:
+        sample_rate = wf.getframerate()
+        channels = wf.getnchannels()
+        pcm_bytes = wf.readframes(wf.getnframes())
 
-    # Raw headerless PCM -- Content-Type looks like "audio/pcm;rate=24000;channels=1".
-    content_type = response.headers.get("content-type", "")
-    rate_match = re.search(r"rate=(\d+)", content_type)
-    channels_match = re.search(r"channels=(\d+)", content_type)
-    sample_rate = int(rate_match.group(1)) if rate_match else 24000
-    channels = int(channels_match.group(1)) if channels_match else 1
-
-    samples = np.frombuffer(response.content, dtype="<i2")
+    samples = np.frombuffer(pcm_bytes, dtype="<i2")
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
     return samples, sample_rate
