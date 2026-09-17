@@ -50,16 +50,18 @@ See setup step 2 below.
 Why TTS is different here than in the notebook: Piper's voices sound
 noticeably synthetic. Several Telugu-capable options were tried after that --
 **edge-tts** (Microsoft's neural voices, still sounded synthetic for Telugu
-specifically) and **Sarvam AI's Bulbul v3** (trained specifically on Indian
-languages, but needs a separate paid account outside OpenRouter, ruled out).
-There was also a detour to **Deepgram Aura-2 via OpenRouter** for its speed
-and clarity, but it's English-only, and Telugu is this project's actual
-target audience, so that meant running the whole script in English -- not
-the real goal. TTS is back on **Google's Gemini 3.1 Flash TTS Preview via
-OpenRouter** (`google/gemini-3.1-flash-tts-preview`) for Telugu support --
-this was never confirmed against Google's own docs, and it's noticeably
-slower (6-12+ seconds per reply) than Deepgram was, both real trade-offs
-accepted deliberately to get Telugu output at all through OpenRouter alone.
+specifically), **Google's Gemini 3.1 Flash TTS Preview via OpenRouter**
+(broad claimed language coverage, but Telugu support was never confirmed),
+and **Sarvam AI's Bulbul v3** (trained specifically on Indian languages, but
+needs a separate paid account outside OpenRouter). TTS now runs on
+**Deepgram Aura-2 via OpenRouter** (`deepgram/aura-2`) instead -- clearer,
+faster (purpose-built for low-latency conversational voice agents, unlike
+Gemini's 6-12+ second replies), but **English-only**, so the whole script
+(system prompt, consent disclosure, opt-out reply in `programme_config.py`)
+now runs in English too, a deliberate trade-off away from this project's
+actual Telugu-speaking audience made explicitly for voice quality/speed. If
+Telugu comes back as a requirement, both `pipeline.py`'s TTS and
+`programme_config.py` need to change together again.
 
 ## What's in this folder
 
@@ -67,12 +69,11 @@ accepted deliberately to get Telugu output at all through OpenRouter alone.
   (Exotel AgentStream) to the STT/RAG/LLM/TTS pipeline.
 - `pipeline.py` -- STT (Whisper Large V3 Turbo, hosted via OpenRouter), RAG
   (Chroma + sentence-transformers), LLM (Claude Haiku 4.5 via OpenRouter),
-  TTS (Gemini 3.1 Flash TTS Preview, hosted via OpenRouter).
+  TTS (Deepgram Aura-2, hosted via OpenRouter).
 - `programme_config.py` -- the same editable programme pitch variables as the
   notebook. Edit the values here too.
-- `test_deepgram_tts_direct.py` -- standalone script for previewing Deepgram
-  Aura-2 voices (kept from the English detour -- useful again if TTS ever
-  moves back to Deepgram/English).
+- `test_deepgram_tts_direct.py` -- standalone script to preview the TTS voice
+  without needing a full call.
 - `requirements.txt` -- Python dependencies for this service.
 
 ## Setup
@@ -108,8 +109,8 @@ no code change needed if you rotate the key later, just update the env var and
 restart the bridge. This is billed against your OpenRouter credit balance --
 `pipeline.py`'s `OPENROUTER_MODEL` (`anthropic/claude-haiku-4.5`) is a paid
 model, so calls cost something per use, same as calling Claude directly would.
-TTS (`google/gemini-3.1-flash-tts-preview`) is billed against this same
-OpenRouter account and key -- no separate signup needed for it.
+TTS (`deepgram/aura-2`) is billed against this same OpenRouter account and key
+-- no separate signup needed for it.
 
 ### 3. Install Python dependencies for the bridge
 
@@ -126,10 +127,12 @@ pip install -r requirements.txt
 
 No voice file to download this time -- the TTS request goes out live over the network on
 each call, using the voice name set in `pipeline.py` (`OPENROUTER_TTS_VOICE`, currently
-`"Zephyr"`, one of Gemini's ~30 language-agnostic character voices -- there's no
-locale-specific name like edge-tts's `te-IN-*` voices; Gemini is expected to speak
-whatever language the input text is in). There's no local CLI to preview a Gemini voice
-before committing to it -- the only way to check one is a real test call.
+`"aura-2-draco-en"`, a British male voice -- one of Aura-2's ~40 voice names, English-only,
+no other language available for this model, and no Indian-English accent among its American/
+British/Australian/Irish/Filipino options either). There's no local CLI to preview a voice
+before committing to it -- `test_deepgram_tts_direct.py` in this folder is a quick standalone
+script for that: edit the `text`/`voice` in it and run `python3 test_deepgram_tts_direct.py`
+to save an mp3 you can listen to without needing a full test call.
 
 ### 4. Edit the programme details
 
@@ -175,13 +178,11 @@ if you see it, so the parsing can be corrected.
   funded `OPENROUTER_API_KEY` -- STT moved off this machine's CPU specifically
   because local transcription kept hitting unpredictable multi-second-to-a-minute
   stalls; hosted Whisper trades a small per-call cost for reliability and speed.
-- TTS also costs real money now and needs live internet access (Gemini 3.1
-  Flash TTS Preview via OpenRouter, same funded `OPENROUTER_API_KEY` as the
-  LLM/STT) -- unlike Piper, it won't work offline. Telugu output
-  quality/correctness for this specific model was not confirmed before
-  switching to it, and it's noticeably slower (6-12+ seconds per reply) than
-  the Deepgram/English setup tried in between -- listen critically on a real
-  test call rather than assuming it's right.
+- TTS also costs real money now and needs live internet access (Deepgram
+  Aura-2 via OpenRouter, same funded `OPENROUTER_API_KEY` as the LLM/STT) --
+  unlike Piper, it won't work offline. It's English-only, which is why this
+  whole script currently runs in English rather than Telugu -- see the TTS
+  note near the top of this file.
 - Exotel's trial account can usually only call/receive from phone numbers
   you've manually verified in their console -- fine for testing, not for
   calling arbitrary leads until the account is upgraded off the trial tier.

@@ -23,19 +23,22 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   provider). This paid model avoids the shared free-tier pool entirely.
   Needs an OPENROUTER_API_KEY env var with a funded OpenRouter credit balance
   (see README).
-- TTS: Google Gemini 3.1 Flash TTS Preview, hosted via OpenRouter
-  (`google/gemini-3.1-flash-tts-preview`). Back from Deepgram Aura-2, which
-  sounded clearer and was noticeably faster (2-5s vs Gemini's 6-12+ seconds
-  per reply) but is English-only -- since the project moved back to Telugu
-  as the actual requirement, and Sarvam AI's Telugu-specialized TTS was
-  explicitly ruled out (needs a separate paid account outside OpenRouter),
-  Gemini is the remaining OpenRouter option with a plausible (still
-  unconfirmed) claim to Telugu support. Requests `response_format: "pcm"`
-  explicitly -- OpenRouter's /audio/speech endpoint defaults to raw PCM
-  already (the opposite of OpenAI's own API, which defaults to mp3), but
-  asking for it outright avoids relying on an undocumented default. Expect
-  TTS latency to be noticeably worse than the Deepgram/English setup this
-  replaced -- that trade-off was made deliberately for Telugu support.
+- TTS: Deepgram Aura-2, hosted via OpenRouter (`deepgram/aura-2`). This is an
+  English-only model -- it has no Telugu (or any non-English) voice at all --
+  so using it meant switching the whole script (system prompt, consent
+  disclosure, opt-out reply in programme_config.py) to English, a deliberate
+  trade-off away from this project's actual Telugu-speaking audience, made
+  explicitly for better voice quality and much lower latency than the
+  Telugu-capable options tried before it (Gemini TTS routinely took
+  6-12+ seconds per reply; Deepgram is purpose-built for low-latency
+  conversational voice agents). If Telugu comes back as a requirement later,
+  this is the piece that needs to change again, alongside programme_config.py.
+  Requests `response_format: "pcm"` explicitly -- OpenRouter's /audio/speech
+  endpoint defaults to raw PCM already (the opposite of OpenAI's own API,
+  which defaults to mp3), but asking for it outright avoids relying on an
+  undocumented default. Same content-type-parsing approach already proven
+  correct for the Gemini TTS integration this replaced (rate/channels read
+  from `Content-Type: audio/pcm;rate=<N>;channels=<N>`).
 """
 
 import base64
@@ -75,15 +78,15 @@ OPENROUTER_STT_MODEL = "openai/whisper-large-v3-turbo"
 OPENROUTER_STT_URL = "https://openrouter.ai/api/v1/audio/transcriptions"
 STT_TIMEOUT_S = 15  # generous for a network call; hosted Whisper itself is very fast
 
-# Gemini TTS via OpenRouter -- see module docstring. "Zephyr" is one of
-# Gemini's ~30 voice names (confirmed valid from OpenRouter's own code
-# sample); these are language-agnostic character voices, not locale-specific
-# like edge-tts's te-IN-* names -- Gemini is expected to speak whatever
-# language the input text is in, so passing Telugu text should get Telugu
-# audio. Swap to a different voice name from Google's Gemini TTS voice list
-# if this one doesn't suit the "Srinivas" persona.
-OPENROUTER_TTS_MODEL = "google/gemini-3.1-flash-tts-preview"
-OPENROUTER_TTS_VOICE = "Zephyr"
+# Deepgram Aura-2 via OpenRouter -- see module docstring. English-only, and
+# Aura-2 has no Indian-English accent at all (only American, British,
+# Australian, Irish, Filipino) -- "aura-2-draco-en" is one of its British
+# male voices, picked over the earlier "aura-2-arcas-en" (American) on the
+# theory that British English pronunciation/vocabulary is generally more
+# familiar to Indian English speakers/listeners than American -- still not a
+# genuine Indian accent, which no OpenRouter TTS model currently offers.
+OPENROUTER_TTS_MODEL = "deepgram/aura-2"
+OPENROUTER_TTS_VOICE = "aura-2-draco-en"
 OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
 TTS_TIMEOUT_S = 15
 
@@ -162,15 +165,17 @@ def transcribe_pcm(pcm_16khz_f32: np.ndarray) -> str:
             data=json.dumps({
                 "model": OPENROUTER_STT_MODEL,
                 "input_audio": {"data": b64_audio, "format": "wav"},
-                # "te" (ISO-639-1) -- the standard Whisper language-hint param name;
+                # "en" (ISO-639-1) -- the standard Whisper language-hint param name;
                 # not confirmed against OpenRouter's own docs for this endpoint (the
                 # sample we had didn't show it), but without it short/ambiguous clips
-                # were being auto-detected as random languages/scripts. This was
-                # briefly "en" during a detour to an English-only TTS model -- keep
-                # this in sync with whatever language programme_config.py's
-                # SYSTEM_PROMPT_TEMPLATE actually uses, or STT will be hinted toward
-                # the wrong language/script even on clear, loud audio.
-                "language": "te",
+                # were being auto-detected as random languages/scripts. Was "te" from
+                # when the script was in Telugu -- left stale after the switch to
+                # English (programme_config.py), which meant Whisper was being hinted
+                # toward the wrong language/script even on clear, loud English audio,
+                # producing empty or garbled-Telugu-script transcriptions instead of
+                # real English text. Keep this in sync with whatever language
+                # programme_config.py's SYSTEM_PROMPT_TEMPLATE actually uses.
+                "language": "en",
             }),
             timeout=STT_TIMEOUT_S,
         )
@@ -205,9 +210,7 @@ def generate_response(user_text: str, chat_history=None) -> dict:
     })
 
     # Spoken fallback on API failure only, never sent anywhere as text.
-    # Telugu: "One moment, let me try that again." -- spoken fallback on API
-    # failure only, never sent anywhere as text.
-    fallback_reply = "ఒక్క నిమిషం, మళ్ళీ ప్రయత్నిస్తాను."
+    fallback_reply = "One moment, let me try that again."
 
     try:
         # OpenAI-style chat payload: system prompt goes inside `messages` as
