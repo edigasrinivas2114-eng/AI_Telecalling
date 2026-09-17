@@ -67,6 +67,16 @@ MAX_UTTERANCE_MS = 5_000
 # 80ms trigger.
 BARGE_IN_SPEECH_FRAMES = 12  # 240ms
 
+# Ignore barge-in entirely for the first stretch of each reply. A genuine
+# caller interruption doesn't happen in the very first fraction of a second
+# of the bot starting to talk -- real test calls showed every single reply
+# getting cut short almost immediately, which BARGE_IN_SPEECH_FRAMES alone
+# didn't fix (acoustic echo/ambient noise can still rack up 240ms of
+# VAD-flagged "speech" within a second or two of playback starting). This
+# grace period is a second line of defense on top of that, not a substitute
+# for testing with a headset if echo turns out to be the actual cause.
+BARGE_IN_GRACE_MS = 500
+
 # Asterisk's AudioSocket app kills the call after ~2s of the bridge sending
 # nothing back, regardless of whether the call is otherwise still alive. STT+LLM
 # on CPU routinely take longer than that, so a keepalive thread sends silent
@@ -220,8 +230,9 @@ def speak(sock: socket.socket, text: str, lock: threading.Lock, state: CallState
 
     state.barge_in.clear()
     raw = pcm_8k.astype("<i2").tobytes()
-    for i in range(0, len(raw), FRAME_BYTES):
-        if state.barge_in.is_set():
+    grace_frames = BARGE_IN_GRACE_MS // FRAME_MS
+    for frame_idx, i in enumerate(range(0, len(raw), FRAME_BYTES)):
+        if frame_idx >= grace_frames and state.barge_in.is_set():
             print("  [TTS] interrupted -- caller started talking")
             return True
         send_audio_frame(sock, raw[i:i + FRAME_BYTES], lock)
