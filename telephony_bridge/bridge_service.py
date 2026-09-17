@@ -55,6 +55,17 @@ SILENCE_MS_TO_END_TURN = 800
 # asked to make sense of.
 MAX_UTTERANCE_MS = 5_000
 
+# Minimum peak amplitude (int16 scale, max 32767) for a captured turn to even
+# be sent to Whisper. Real test calls showed a clean, consistent split:
+# genuine speech always peaked at 17000+, while near-silent/background-noise
+# captures (peak under ~600) still got transcribed as confident-sounding text
+# like "Thank you." -- a well-known Whisper failure mode (hallucinating stock
+# phrases on silence, likely from YouTube-heavy training data). The script-
+# based hallucination filter below can't catch this since it's valid English,
+# not gibberish script. Skipping the STT call outright below this threshold
+# is safe given the size of the gap observed, and saves an API call too.
+MIN_SPEECH_PEAK = 3000
+
 # How many consecutive speech frames are needed before treating it as a
 # barge-in (interrupting the bot's current reply). Higher than the 1-frame
 # threshold used for normal turn-taking, since a false trip here cuts the bot
@@ -303,6 +314,11 @@ class CallHandler(socketserver.BaseRequestHandler):
                     # Whisper still can't use (peak/RMS in a normal range).
                     peak = int(np.abs(pcm_8k).max()) if len(pcm_8k) else 0
                     rms = float(np.sqrt(np.mean(pcm_8k.astype(np.float64) ** 2))) if len(pcm_8k) else 0.0
+
+                    if peak < MIN_SPEECH_PEAK:
+                        print(f"[call {call_id}] [STT skipped, captured {captured_ms}ms, "
+                              f"peak={peak} rms={rms:.0f}] too quiet to be real speech -- not calling Whisper")
+                        continue
 
                     t0 = time.time()
                     pcm_16k_f32 = resample(pcm_8k, SAMPLE_RATE, 16000) / 32768.0
