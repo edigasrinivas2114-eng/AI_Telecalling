@@ -14,6 +14,12 @@ this kind of undocumented default.
 
 Aura-2 is English-only -- there is no Telugu (or any non-English) voice for
 it at all, so this is only useful if the whole script goes back to English.
+
+Note: this saves the RAW mp3 straight from the API, without the TTS_GAIN
+digital volume boost pipeline.py's synthesize_pcm() now applies (real calls
+came through quieter than expected) -- so this file will sound quieter than
+an actual call. For comparing multiple voices at production loudness, use
+test_deepgram_voices.py instead, which applies the same gain.
 """
 
 import os

@@ -38,7 +38,12 @@ This is the phase-2 counterpart to the Colab notebook's pipeline:
   which defaults to mp3), but asking for it outright avoids relying on an
   undocumented default. Same content-type-parsing approach already proven
   correct for the Gemini TTS integration this replaced (rate/channels read
-  from `Content-Type: audio/pcm;rate=<N>;channels=<N>`).
+  from `Content-Type: audio/pcm;rate=<N>;channels=<N>`). Applies a digital
+  gain (TTS_GAIN) to the decoded samples afterward -- real calls came through
+  quieter than expected, and Aura-2's API has no volume/gain parameter of its
+  own to ask for more. test_deepgram_voices.py generates the same sample line
+  in several candidate voices (with the same gain applied) to compare before
+  changing OPENROUTER_TTS_VOICE.
 """
 
 import base64
@@ -89,6 +94,14 @@ OPENROUTER_TTS_MODEL = "deepgram/aura-2"
 OPENROUTER_TTS_VOICE = "aura-2-draco-en"
 OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
 TTS_TIMEOUT_S = 15
+
+# Aura-2's raw output came through noticeably quiet on real calls -- there's
+# no volume/gain parameter on the API itself, so this applies a straight
+# digital gain to the decoded samples instead. 2.0x (~+6dB) with clipping
+# protection (see synthesize_pcm) rather than just scaling unchecked, since
+# TTS output can already sit close to full scale on louder words/voices.
+# Raise/lower this if calls still sound too quiet/start clipping.
+TTS_GAIN = 2.0
 
 print("Loading embedder + knowledge base...")
 # Multilingual, not "all-MiniLM-L6-v2" (English-only) -- with Telugu callers,
@@ -279,4 +292,5 @@ def synthesize_pcm(text: str):
     samples = np.frombuffer(response.content, dtype="<i2")
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
+    samples = np.clip(samples.astype(np.float32) * TTS_GAIN, -32768, 32767).astype(np.int16)
     return samples, sample_rate
