@@ -241,22 +241,33 @@ def generate_response(user_text: str, chat_history=None) -> dict:
 
 def synthesize_pcm(text: str):
     """Returns (mono int16 PCM samples, sample_rate) -- callers must resample
-    to whatever they actually need."""
-    response = requests.post(
-        url=OPENROUTER_TTS_URL,
-        headers={
-            "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": OPENROUTER_TTS_MODEL,
-            "input": text,
-            "voice": OPENROUTER_TTS_VOICE,
-            "response_format": "pcm",
-        },
-        timeout=TTS_TIMEOUT_S,
-    )
-    response.raise_for_status()
+    to whatever they actually need. On any TTS failure, returns an empty
+    sample array rather than raising -- unlike a crash, this lets the caller
+    (bridge_service.speak()) just skip playing that one reply and keep the
+    call alive, matching how transcribe_pcm()/generate_response() already
+    degrade instead of taking the whole call down over a transient API error."""
+    try:
+        response = requests.post(
+            url=OPENROUTER_TTS_URL,
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": OPENROUTER_TTS_MODEL,
+                "input": text,
+                "voice": OPENROUTER_TTS_VOICE,
+                "response_format": "pcm",
+            },
+            timeout=TTS_TIMEOUT_S,
+        )
+        response.raise_for_status()
+    except requests.exceptions.Timeout:
+        print(f"  [TTS] timed out after {TTS_TIMEOUT_S}s -- skipping this reply's audio")
+        return np.array([], dtype=np.int16), 24000
+    except requests.exceptions.RequestException as e:
+        print(f"  [TTS ERROR] OpenRouter speech synthesis failed: {e}")
+        return np.array([], dtype=np.int16), 24000
 
     # Raw headerless PCM -- Content-Type looks like "audio/pcm;rate=24000;channels=1".
     content_type = response.headers.get("content-type", "")
