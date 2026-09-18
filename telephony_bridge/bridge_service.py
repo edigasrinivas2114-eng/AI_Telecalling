@@ -76,14 +76,28 @@ SAMPLE_RATE = 8000          # requested via ?sample-rate=8000 in the Exotel Voic
 FRAME_BYTES = 320           # 20ms of 8kHz 16-bit mono PCM
 FRAME_MS = 20
 SILENCE_MS_TO_END_TURN = 800
-# Lowered again from 8s -- real test calls kept hitting this full cap even on
-# short replies like "thank you"/"bye", pointing to background noise keeping
-# the VAD's silence timer from ever resetting. Hosted Whisper doesn't have a
-# vad_filter equivalent to fall back on (unlike the old local setup), so a
-# long noisy capture doesn't just come back empty -- it hallucinates a full,
-# wrong-language sentence. A shorter cap bounds how much noise it can be
-# asked to make sense of.
-MAX_UTTERANCE_MS = 5_000
+# Raised back up from 5s now that FRAME_SPEECH_PEAK_THRESHOLD below screens out
+# the background noise that used to fool webrtcvad into never seeing silence
+# (previously the only lever available was capping utterance length, which cut
+# genuinely long caller sentences short and fed Whisper a half-finished
+# thought -- a likely cause of the LLM "misunderstanding" what was said).
+# Hosted Whisper doesn't have a vad_filter equivalent to fall back on (unlike
+# the old local setup), so a long noisy capture doesn't just come back empty --
+# it hallucinates a full, wrong-language sentence. This cap is a last-resort
+# bound now, not the primary defense against that.
+MAX_UTTERANCE_MS = 7_000
+
+# Minimum amplitude (int16 scale, max 32767) for a single 20ms frame to count
+# as real speech, on top of webrtcvad's own classification. Real test calls
+# showed webrtcvad (even at aggressiveness 2) still classifying quiet line
+# noise/hiss as speech often enough to both stop a caller's turn from ever
+# reaching silence (see MAX_UTTERANCE_MS above) and falsely trigger barge-in
+# mid-reply (see BARGE_IN_SPEECH_FRAMES below) -- both look like "the bot
+# ignored/cut off what I said" from the caller's side, but the actual root
+# cause is upstream in turn detection, not the LLM or TTS. Deliberately well
+# under MIN_SPEECH_PEAK's whole-utterance 3000 threshold so it only screens
+# out near-silent noise between/under real speech, not quiet speech itself.
+FRAME_SPEECH_PEAK_THRESHOLD = 600
 
 # Minimum peak amplitude (int16 scale, max 32767) for a captured turn to even
 # be sent to Whisper. Real test calls showed a clean, consistent split:
@@ -110,6 +124,11 @@ BARGE_IN_GRACE_MS = 500
 
 vad = webrtcvad.Vad(2)  # aggressiveness 0-3 -- 2 is the middle ground; 3 was too strict
                          # and missed real speech entirely in real testing.
+
+
+def _frame_peak(frame: bytes) -> int:
+    samples = np.frombuffer(frame, dtype="<i2")
+    return int(np.abs(samples).max()) if len(samples) else 0
 
 
 def resample(int16_array: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
@@ -146,7 +165,7 @@ def handle_audio_frame(frame: bytes, state: CallState):
     (not just while "listening") -- this is what makes barge-in possible."""
     if len(frame) != FRAME_BYTES:
         return
-    is_speech = vad.is_speech(frame, SAMPLE_RATE)
+    is_speech = vad.is_speech(frame, SAMPLE_RATE) and _frame_peak(frame) >= FRAME_SPEECH_PEAK_THRESHOLD
 
     # A completed turn is already waiting for the main task to drain it
     # (e.g. it's still busy running STT on the previous turn) -- stop
