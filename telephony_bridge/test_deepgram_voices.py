@@ -41,8 +41,12 @@ SAMPLE_TEXT = (
     "This call is being recorded. Could you tell me your name?"
 )
 
-# A representative spread across genders/accents from Aura-2's catalog, not
-# the full 40+ list -- add or remove names freely, the script doesn't care.
+# A wider spread across genders/accents from Aura-2's catalog (91 voices
+# total per Deepgram, spanning American/British/Irish/Australian/Filipino
+# English) -- still not exhaustive, and names past the first ten are less
+# certain (Deepgram's docs weren't directly reachable to cross-check every
+# one while writing this). Add or remove names freely -- a wrong/renamed
+# one just gets skipped, it won't stop the rest from generating.
 CANDIDATE_VOICES = [
     "aura-2-draco-en",      # British male -- current production voice, for comparison
     "aura-2-thalia-en",     # American female -- Deepgram's commonly-used default
@@ -54,6 +58,16 @@ CANDIDATE_VOICES = [
     "aura-2-helios-en",     # American male
     "aura-2-luna-en",       # American female
     "aura-2-stella-en",     # American female
+    "aura-2-hera-en",       # American female
+    "aura-2-zeus-en",       # American male
+    "aura-2-perseus-en",    # American male
+    "aura-2-cora-en",       # American female
+    "aura-2-cordelia-en",   # American female
+    "aura-2-apollo-en",     # American male
+    "aura-2-hermes-en",     # American male
+    "aura-2-atlas-en",      # American male
+    "aura-2-juno-en",       # American female
+    "aura-2-selene-en",     # American female
 ]
 
 
